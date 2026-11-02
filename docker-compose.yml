@@ -1,0 +1,186 @@
+# Hostel Management System — Docker Compose (proposed 🟡)
+# All credentials come from .env — never hardcode here.
+# Stack: PostgreSQL + Redis + S3-compatible storage + NestJS API + Next.js PWA + worker + nginx
+# Technology choices are proposed defaults pending G-02/OD-13 approval.
+
+services:
+  # ── Reverse proxy ────────────────────────────────────────────────────────────
+  nginx:
+    image: nginx:${NGINX_VERSION}
+    ports:
+      - "127.0.0.1:8080:80"
+    volumes:
+      - ./config/nginx.dev.conf:/etc/nginx/nginx.conf:ro
+    depends_on:
+      frontend:
+        condition: service_healthy
+      api:
+        condition: service_healthy
+    networks:
+      - hms-net
+    restart: unless-stopped
+
+  # ── Next.js PWA frontend ──────────────────────────────────────────────────
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+      args:
+        NEXT_PUBLIC_API_URL: ""
+    environment:
+      NODE_ENV: production
+    networks:
+      - hms-net
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:3000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  # ── NestJS API (scale with --scale api=N) ────────────────────────────────
+  api:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    environment:
+      NODE_ENV: production
+      API_RATE_LIMIT_PER_MINUTE: ${API_RATE_LIMIT_PER_MINUTE:-10000}
+      DATABASE_URL: postgresql://hms_app:${HMS_APP_PASSWORD}@postgres:5432/${POSTGRES_DB}?schema=public
+      DATABASE_MIGRATION_URL: ${DATABASE_MIGRATION_URL:-postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}?schema=public}
+      REDIS_URL: ${REDIS_URL}
+      JWT_SECRET: ${JWT_SECRET}
+      PLATFORM_JWT_SECRET: ${PLATFORM_JWT_SECRET}
+      JWT_ACCESS_EXPIRY: ${JWT_ACCESS_EXPIRY}
+      JWT_REFRESH_EXPIRY: ${JWT_REFRESH_EXPIRY}
+      FIELD_ENCRYPTION_KEY: ${FIELD_ENCRYPTION_KEY}
+      OBJECT_STORAGE_URL: http://object-storage:8333
+      OBJECT_STORAGE_ACCESS_KEY: ${OBJECT_STORAGE_ACCESS_KEY}
+      OBJECT_STORAGE_SECRET_KEY: ${OBJECT_STORAGE_SECRET_KEY}
+      APP_TIMEZONE: ${APP_TIMEZONE}
+      APP_DEFAULT_CURRENCY: ${APP_DEFAULT_CURRENCY}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      database-role-setup:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+      object-storage:
+        condition: service_started
+    command: ["sh", "-c", "npx prisma migrate deploy && node dist/src/main"]
+    networks:
+      - hms-net
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:3001/api/health/ready"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  # ── BullMQ worker ────────────────────────────────────────────────────────
+  worker:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile.worker
+    environment:
+      NODE_ENV: production
+      DATABASE_URL: postgresql://hms_app:${HMS_APP_PASSWORD}@postgres:5432/${POSTGRES_DB}?schema=public
+      DATABASE_MIGRATION_URL: postgresql://hms_app:${HMS_APP_PASSWORD}@postgres:5432/${POSTGRES_DB}?schema=public
+      REDIS_URL: ${REDIS_URL}
+      JWT_SECRET: ${JWT_SECRET}
+      PLATFORM_JWT_SECRET: ${PLATFORM_JWT_SECRET}
+      FIELD_ENCRYPTION_KEY: ${FIELD_ENCRYPTION_KEY}
+      OBJECT_STORAGE_URL: http://object-storage:8333
+      OBJECT_STORAGE_ACCESS_KEY: ${OBJECT_STORAGE_ACCESS_KEY}
+      OBJECT_STORAGE_SECRET_KEY: ${OBJECT_STORAGE_SECRET_KEY}
+      APP_TIMEZONE: ${APP_TIMEZONE}
+      APP_DEFAULT_CURRENCY: ${APP_DEFAULT_CURRENCY}
+      WORKER_CONCURRENCY: ${WORKER_CONCURRENCY}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      api:
+        condition: service_healthy
+    networks:
+      - hms-net
+    restart: unless-stopped
+
+  # ── PostgreSQL ────────────────────────────────────────────────────────────
+  postgres:
+    image: postgres:${POSTGRES_VERSION}
+    ports:
+      - "127.0.0.1:15432:5432"
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB}
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      HMS_APP_PASSWORD: ${HMS_APP_PASSWORD:?HMS_APP_PASSWORD must be set}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    networks:
+      - hms-net
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    # Internal only — port NOT published to host
+
+  database-role-setup:
+    image: postgres:${POSTGRES_VERSION}
+    entrypoint: ["/bin/sh", "-c", "PGPASSWORD=\"$${POSTGRES_PASSWORD}\" psql -h postgres -U \"$${POSTGRES_USER}\" -d \"$${POSTGRES_DB}\" -v ON_ERROR_STOP=1 -v app_password=\"$${HMS_APP_PASSWORD}\" -f /scripts/001-runtime-role.sql"]
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB}
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      HMS_APP_PASSWORD: ${HMS_APP_PASSWORD:?HMS_APP_PASSWORD must be set}
+    volumes:
+      - ./database/init/001-runtime-role.sql:/scripts/001-runtime-role.sql:ro
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - hms-net
+    restart: "no"
+
+  # ── Redis ────────────────────────────────────────────────────────────────
+  redis:
+    image: redis:${REDIS_VERSION}
+    ports:
+      - "127.0.0.1:16379:6379"
+    command: ["redis-server", "/usr/local/etc/redis/redis.conf"]
+    volumes:
+      - redis_data:/data
+      - ./config/redis.conf:/usr/local/etc/redis/redis.conf:ro
+    networks:
+      - hms-net
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    # Internal only — port NOT published to host
+
+  # ── S3-compatible local object storage ─────────────────────────────────
+  object-storage:
+    image: chrislusf/seaweedfs:latest
+    command: server -dir=/data -s3 -s3.port=8333
+    volumes:
+      - object_storage_data:/data
+    networks:
+      - hms-net
+    ports:
+      - "127.0.0.1:18333:8333"
+    restart: unless-stopped
+
+networks:
+  hms-net:
+    driver: bridge
+
+volumes:
+  postgres_data: {}
+  redis_data: {}
+  object_storage_data: {}

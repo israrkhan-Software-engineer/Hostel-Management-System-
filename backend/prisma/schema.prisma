@@ -1,0 +1,925 @@
+// Hostel Management System — Prisma Schema
+// Phase 0: Foundation — tenants, branches, physical hierarchy, users, roles, permissions
+//
+// Proposed defaults (🟡): PostgreSQL engine, UUID PKs, shared-DB multi-tenancy,
+// tenant_id NOT NULL FK on every tenant-owned table, soft-delete via deletedAt.
+// Pending owner approval of G-01 (tenancy), G-02/OD-13 (stack).
+//
+// All timestamps stored in UTC; display in configured timezone (APP_TIMEZONE).
+// Currency stored as integer minor units where applicable (proposed, pending G-04/OD-10).
+// SRS V2 §13.4 governs schema design decisions.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  // proposed: PostgreSQL (SRS V2 §2.5, §13.4); pending G-02/OD-13
+  provider  = "postgresql"
+  url       = env("DATABASE_URL")
+  directUrl = env("DATABASE_MIGRATION_URL")
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// ENUMS
+// ─────────────────────────────────────────────────────────────────────────────
+
+enum TenantStatus {
+  PROVISIONING
+  ACTIVE
+  SUSPENDED
+  OFFBOARDING
+  CLOSED
+}
+
+enum BranchStatus {
+  ACTIVE
+  INACTIVE
+}
+
+enum BedStatus {
+  AVAILABLE
+  RESERVED
+  OCCUPIED
+  OUT_OF_SERVICE
+}
+
+enum ResidentStatus {
+  ACTIVE
+  INACTIVE
+}
+
+enum AdmissionStatus {
+  PENDING
+  APPROVED
+  REJECTED
+  CHECKED_IN
+  CHECKED_OUT
+  CANCELLED
+}
+
+enum AllocationStatus {
+  RESERVED
+  CHECKED_IN
+  ENDED
+}
+
+enum InvoiceStatus {
+  ISSUED
+  VOID
+}
+
+enum PaymentStatus {
+  PENDING
+  VERIFIED
+  REJECTED
+}
+
+enum PaymentMethod {
+  CASH
+  BANK_TRANSFER
+  MOBILE_WALLET
+  CARD_MANUAL
+}
+
+enum UserStatus {
+  ACTIVE
+  DEACTIVATED
+}
+
+enum MessMealType {
+  BREAKFAST
+  LUNCH
+  DINNER
+}
+
+enum ComplaintStatus {
+  OPEN
+  IN_PROGRESS
+  RESOLVED
+  CLOSED
+}
+
+enum ComplaintPriority {
+  LOW
+  NORMAL
+  HIGH
+  URGENT
+}
+
+enum NoticeStatus {
+  DRAFT
+  PUBLISHED
+}
+
+enum VisitorVisitStatus {
+  PENDING
+  APPROVED
+  REJECTED
+  CHECKED_IN
+  CHECKED_OUT
+}
+
+enum PlatformAdminStatus {
+  ACTIVE
+  DEACTIVATED
+}
+
+// Permission actions — 10 types per SRS V2 §3 / Handover §5
+// "verify" is new vs the Gym reference (SRS V2 §3)
+enum PermissionAction {
+  view
+  create
+  edit
+  delete
+  approve
+  export
+  print
+  assign
+  verify
+  manage_settings
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// PLATFORM — Tenants
+// Every hostel organisation is an independent tenant (SRS V2 §13.1).
+// ─────────────────────────────────────────────────────────────────────────────
+
+model Tenant {
+  id     String       @id @default(uuid()) @db.Uuid
+  /// System-generated, never reused, never accepted from client (SRS V2 §13.1)
+  name   String
+  slug   String       @unique
+  locationAddress String @default("") @map("location_address")
+  status TenantStatus @default(PROVISIONING)
+
+  /// Proposed default: Asia/Karachi (SRS V2 NFR-020, pending G-04/OD-08)
+  timezone String @default("Asia/Karachi")
+  /// Proposed default: PKR (SRS V2 NFR-020, pending G-04/OD-08)
+  currency String @default("PKR")
+
+  /// Tenant-level settings (billing calendar, policies, notification templates)
+  settings Json @default("{}")
+
+  createdAt DateTime  @default(now()) @map("created_at")
+  updatedAt DateTime  @updatedAt @map("updated_at")
+  deletedAt DateTime? @map("deleted_at") // soft delete
+
+  // Relations
+  branches            Branch[]
+  buildings           Building[]
+  floors              Floor[]
+  rooms               Room[]
+  beds                Bed[]
+  users               User[]
+  roles               Role[]
+  userTenantMembers   UserTenantMembership[]
+  refreshTokens       RefreshToken[]
+  passwordResetTokens PasswordResetToken[]
+  residents           Resident[]
+  admissions          Admission[]
+  allocations         BedAllocation[]
+  invoices            Invoice[]
+  payments            Payment[]
+  refunds             Refund[]
+  messMenus           MessMenu[]
+  complaints          Complaint[]
+  notices             Notice[]
+  visitorVisits       VisitorVisit[]
+
+  @@map("tenants")
+}
+
+model PlatformAdmin {
+  id                           String              @id @default(uuid()) @db.Uuid
+  email                        String              @unique
+  passwordHash                 String              @map("password_hash")
+  mfaSecretEncrypted           String?             @map("mfa_secret_encrypted")
+  mfaEnrollmentSecretEncrypted String?             @map("mfa_enrollment_secret_encrypted")
+  status                       PlatformAdminStatus @default(ACTIVE)
+  tokenVersion                 Int                 @default(0) @map("token_version")
+  lastLoginAt                  DateTime?           @map("last_login_at")
+  createdAt                    DateTime            @default(now()) @map("created_at")
+  updatedAt                    DateTime            @updatedAt @map("updated_at")
+
+  recoveryCodes PlatformAdminRecoveryCode[]
+  auditEvents   PlatformAdminAuditLog[]
+
+  @@map("platform_admins")
+}
+
+model PlatformAdminRecoveryCode {
+  id              String        @id @default(uuid()) @db.Uuid
+  platformAdminId String        @map("platform_admin_id") @db.Uuid
+  platformAdmin   PlatformAdmin @relation(fields: [platformAdminId], references: [id], onDelete: Cascade)
+  codeHash        String        @unique @map("code_hash")
+  usedAt          DateTime?     @map("used_at")
+  createdAt       DateTime      @default(now()) @map("created_at")
+
+  @@index([platformAdminId, usedAt])
+  @@map("platform_admin_recovery_codes")
+}
+
+model PlatformAdminAuditLog {
+  id              String        @id @default(uuid()) @db.Uuid
+  platformAdminId String        @map("platform_admin_id") @db.Uuid
+  platformAdmin   PlatformAdmin @relation(fields: [platformAdminId], references: [id])
+  action          String
+  targetTenantId  String?       @map("target_tenant_id") @db.Uuid
+  targetUserId    String?       @map("target_user_id") @db.Uuid
+  metadata        Json          @default("{}")
+  createdAt       DateTime      @default(now()) @map("created_at")
+
+  @@index([createdAt, id])
+  @@index([targetTenantId, createdAt])
+  @@map("platform_admin_audit_logs")
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// BRANCHES and PHYSICAL HIERARCHY
+// Tenant → Branch → Building → Floor → Room → Bed (SRS V2 §13.4 / DB §4)
+// ─────────────────────────────────────────────────────────────────────────────
+
+model Branch {
+  id       String @id @default(uuid()) @db.Uuid
+  tenantId String @map("tenant_id") @db.Uuid
+  tenant   Tenant @relation(fields: [tenantId], references: [id])
+
+  name    String
+  /// Unique code per tenant (e.g. "KHI-1", "LHR-2")
+  code    String
+  address String?
+  phone   String?
+  mapLink String?      @map("map_link")
+  status  BranchStatus @default(ACTIVE)
+
+  /// Branch-specific settings: room rates, admission/visitor/mess policies
+  /// pending owner approval of rates/policies (G-17, G-18, G-21)
+  operatingSettings Json @default("{}") @map("operating_settings")
+
+  createdAt DateTime  @default(now()) @map("created_at")
+  updatedAt DateTime  @updatedAt @map("updated_at")
+  deletedAt DateTime? @map("deleted_at")
+
+  // Relations
+  buildings       Building[]
+  rooms           Room[]
+  beds            Bed[]
+  userBranchScope UserBranchScope[]
+  userGateScope   UserGateScope[]
+  userMessScope   UserMessScope[]
+  residents       Resident[]
+  admissions      Admission[]
+  allocations     BedAllocation[]
+  invoices        Invoice[]
+  payments        Payment[]
+  refunds         Refund[]
+  messMenus       MessMenu[]
+  complaints      Complaint[]
+  notices         Notice[]
+  visitorVisits   VisitorVisit[]
+
+  @@unique([tenantId, code])
+  @@map("branches")
+}
+
+model Building {
+  id       String @id @default(uuid()) @db.Uuid
+  tenantId String @map("tenant_id") @db.Uuid
+  tenant   Tenant @relation(fields: [tenantId], references: [id])
+  branchId String @map("branch_id") @db.Uuid
+  branch   Branch @relation(fields: [branchId], references: [id])
+
+  name String
+
+  createdAt DateTime  @default(now()) @map("created_at")
+  updatedAt DateTime  @updatedAt @map("updated_at")
+  deletedAt DateTime? @map("deleted_at")
+
+  floors Floor[]
+
+  @@map("buildings")
+}
+
+// Tenant relation on Building is a convenience FK; all queries also scope by branchId
+// which already carries tenantId. Same pattern on Floor, Room, Bed.
+
+model Floor {
+  id         String   @id @default(uuid()) @db.Uuid
+  tenantId   String   @map("tenant_id") @db.Uuid
+  tenant     Tenant   @relation(fields: [tenantId], references: [id])
+  buildingId String   @map("building_id") @db.Uuid
+  building   Building @relation(fields: [buildingId], references: [id])
+
+  level Int // 0 = ground, 1 = first, etc.
+  name  String?
+
+  createdAt DateTime  @default(now()) @map("created_at")
+  updatedAt DateTime  @updatedAt @map("updated_at")
+  deletedAt DateTime? @map("deleted_at")
+
+  rooms Room[]
+
+  @@map("floors")
+}
+
+model Room {
+  id       String @id @default(uuid()) @db.Uuid
+  tenantId String @map("tenant_id") @db.Uuid
+  tenant   Tenant @relation(fields: [tenantId], references: [id])
+  branchId String @map("branch_id") @db.Uuid
+  branch   Branch @relation(fields: [branchId], references: [id])
+  floorId  String @map("floor_id") @db.Uuid
+  floor    Floor  @relation(fields: [floorId], references: [id])
+
+  code        String
+  bedCapacity Int    @default(1) @map("bed_capacity") // CHECK 1..10 enforced in migration
+
+  createdAt DateTime  @default(now()) @map("created_at")
+  updatedAt DateTime  @updatedAt @map("updated_at")
+  deletedAt DateTime? @map("deleted_at")
+
+  beds Bed[]
+
+  @@unique([tenantId, code])
+  @@map("rooms")
+}
+
+model Bed {
+  id       String @id @default(uuid()) @db.Uuid
+  tenantId String @map("tenant_id") @db.Uuid
+  tenant   Tenant @relation(fields: [tenantId], references: [id])
+  branchId String @map("branch_id") @db.Uuid
+  branch   Branch @relation(fields: [branchId], references: [id])
+  roomId   String @map("room_id") @db.Uuid
+  room     Room   @relation(fields: [roomId], references: [id])
+
+  code   String
+  status BedStatus @default(AVAILABLE)
+
+  createdAt   DateTime        @default(now()) @map("created_at")
+  updatedAt   DateTime        @updatedAt @map("updated_at")
+  deletedAt   DateTime?       @map("deleted_at")
+  allocations BedAllocation[]
+
+  @@unique([tenantId, roomId, code])
+  @@index([tenantId, branchId, status, deletedAt])
+  @@map("beds")
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// USERS and MULTI-TENANT MEMBERSHIP
+// Users and Residents are separate entities (DB §5 / SRS V2 §3).
+// A user may log in; a resident is the accommodated person.
+// Whether one user may belong to multiple tenants: ❓ OD-19 (open).
+// ─────────────────────────────────────────────────────────────────────────────
+
+model User {
+  id       String @id @default(uuid()) @db.Uuid
+  tenantId String @map("tenant_id") @db.Uuid // primary tenant (the one this account was created for)
+  tenant   Tenant @relation(fields: [tenantId], references: [id])
+
+  firstName String? @map("first_name")
+  lastName  String? @map("last_name")
+  email        String?
+  phone        String?
+  /// argon2 or bcrypt hash — NEVER store plain text (SRS V2 NFR-003)
+  passwordHash String  @map("password_hash")
+
+  status      UserStatus @default(ACTIVE)
+  lastLoginAt DateTime?  @map("last_login_at")
+
+  /// Optional MFA — scope of mandatory MFA is ❓ G-05/OD-32
+  mfaEnabled         Boolean @default(false) @map("mfa_enabled")
+  mfaSecretEncrypted String? @map("mfa_secret_encrypted") // field-encrypted with FIELD_ENCRYPTION_KEY
+
+  /// Increment on deactivation or password change to invalidate all tokens (DB §5)
+  tokenVersion Int @default(0) @map("token_version")
+
+  createdAt DateTime  @default(now()) @map("created_at")
+  updatedAt DateTime  @updatedAt @map("updated_at")
+  deletedAt DateTime? @map("deleted_at")
+
+  // Relations
+  tenantMemberships       UserTenantMembership[]
+  branchScopes            UserBranchScope[]
+  gateScopes              UserGateScope[]
+  messScopes              UserMessScope[]
+  userRoles               UserRole[]
+  refreshTokens           RefreshToken[]
+  passwordResetTokens     PasswordResetToken[]
+  admissionsDecided       Admission[]            @relation("AdmissionDecisionActor")
+  messMenusCreated        MessMenu[]             @relation("MessMenuCreator")
+  complaintsSubmitted     Complaint[]            @relation("ComplaintSubmitter")
+  complaintsAssigned      Complaint[]            @relation("ComplaintAssignee")
+  noticesCreated          Notice[]               @relation("NoticeCreator")
+  visitorVisitsCreated    VisitorVisit[]         @relation("VisitorVisitCreator")
+  visitorVisitsApproved   VisitorVisit[]         @relation("VisitorVisitApprover")
+  visitorVisitsCheckedIn  VisitorVisit[]         @relation("VisitorVisitCheckInActor")
+  visitorVisitsCheckedOut VisitorVisit[]         @relation("VisitorVisitCheckOutActor")
+  residentProfile         Resident?
+
+  @@unique([id, tenantId])
+  @@unique([tenantId, email])
+  @@unique([tenantId, phone])
+  @@map("users")
+}
+
+/// Allows a user to belong to multiple tenants (❓ OD-19 — open decision)
+/// Currently enforced as one tenant per user; model is ready if OD-19 allows multi-tenant.
+model UserTenantMembership {
+  userId   String @map("user_id") @db.Uuid
+  user     User   @relation(fields: [userId], references: [id])
+  tenantId String @map("tenant_id") @db.Uuid
+  tenant   Tenant @relation(fields: [tenantId], references: [id])
+
+  status UserStatus @default(ACTIVE)
+
+  createdAt DateTime @default(now()) @map("created_at")
+
+  @@id([userId, tenantId])
+  @@map("user_tenant_memberships")
+}
+
+/// Branch scope: staff can only access data for their assigned branch(es)
+model UserBranchScope {
+  id       String @id @default(uuid()) @db.Uuid
+  userId   String @map("user_id") @db.Uuid
+  user     User   @relation(fields: [userId], references: [id])
+  branchId String @map("branch_id") @db.Uuid
+  branch   Branch @relation(fields: [branchId], references: [id])
+
+  @@unique([userId, branchId])
+  @@map("user_branch_scopes")
+}
+
+/// Gate scope: security staff assigned to a specific gate (SRS V2 §3)
+model UserGateScope {
+  id       String @id @default(uuid()) @db.Uuid
+  userId   String @map("user_id") @db.Uuid
+  user     User   @relation(fields: [userId], references: [id])
+  branchId String @map("branch_id") @db.Uuid
+  branch   Branch @relation(fields: [branchId], references: [id])
+  gateRef  String @map("gate_ref") // identifier for the physical gate
+
+  @@unique([userId, branchId, gateRef])
+  @@map("user_gate_scopes")
+}
+
+/// Mess scope: mess staff assigned to a specific mess operation
+model UserMessScope {
+  id       String @id @default(uuid()) @db.Uuid
+  userId   String @map("user_id") @db.Uuid
+  user     User   @relation(fields: [userId], references: [id])
+  branchId String @map("branch_id") @db.Uuid
+  branch   Branch @relation(fields: [branchId], references: [id])
+
+  @@unique([userId, branchId])
+  @@map("user_mess_scopes")
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// ROLES and PERMISSIONS (RBAC)
+// Configurable without code changes (SRS V2 §3 / DB §5 / PRD §8).
+// 10 permission types: view create edit delete approve export print assign verify manage_settings
+// "verify" is new vs Gym reference — for payment/visitor/pass verification (SRS V2 §3).
+// Custom roles: owner can create within their permission ceiling (PRD FR-118).
+// ─────────────────────────────────────────────────────────────────────────────
+
+model Role {
+  id       String  @id @default(uuid()) @db.Uuid
+  tenantId String? @map("tenant_id") @db.Uuid // NULL = system/platform role
+  tenant   Tenant? @relation(fields: [tenantId], references: [id])
+
+  name         String
+  description  String?
+  isSystemRole Boolean @default(false) @map("is_system_role")
+
+  createdAt DateTime  @default(now()) @map("created_at")
+  updatedAt DateTime  @updatedAt @map("updated_at")
+  deletedAt DateTime? @map("deleted_at")
+
+  permissions RolePermission[]
+  userRoles   UserRole[]
+
+  @@map("roles")
+}
+
+/// Module names map to backend NestJS module paths
+model Permission {
+  id     String           @id @default(uuid()) @db.Uuid
+  module String // e.g. "residents", "payments", "gate_passes"
+  action PermissionAction
+
+  roles RolePermission[]
+
+  @@unique([module, action])
+  @@map("permissions")
+}
+
+model RolePermission {
+  roleId       String     @map("role_id") @db.Uuid
+  role         Role       @relation(fields: [roleId], references: [id])
+  permissionId String     @map("permission_id") @db.Uuid
+  permission   Permission @relation(fields: [permissionId], references: [id])
+
+  @@id([roleId, permissionId])
+  @@map("role_permissions")
+}
+
+model UserRole {
+  userId   String @map("user_id") @db.Uuid
+  user     User   @relation(fields: [userId], references: [id])
+  tenantId String @map("tenant_id") @db.Uuid // denormalized for fast scope checks
+  roleId   String @map("role_id") @db.Uuid
+  role     Role   @relation(fields: [roleId], references: [id])
+
+  @@id([userId, tenantId, roleId])
+  @@map("user_roles")
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// AUDIT LOGS — append-only base table (Phase 0 scaffold; full detail in Phase 1)
+// SRS V2 §4.11, §13.3 / DB §13
+// ─────────────────────────────────────────────────────────────────────────────
+
+model AuditLog {
+  id          String  @id @default(uuid()) @db.Uuid
+  tenantId    String? @map("tenant_id") @db.Uuid // NULL for platform-level events
+  branchId    String? @map("branch_id") @db.Uuid
+  actorUserId String? @map("actor_user_id") @db.Uuid
+
+  action     String // e.g. "payment.verify", "resident.create"
+  module     String
+  entityType String? @map("entity_type")
+  entityId   String? @map("entity_id")
+  outcome    String // "success" | "failure"
+
+  /// Sensitive values (CNIC, health data) are NEVER stored in before/after (DB §13)
+  beforeData Json? @map("before_data")
+  afterData  Json? @map("after_data")
+  metadata   Json?
+
+  createdAt DateTime @default(now()) @map("created_at")
+
+  // No update/delete path — append-only enforced by application + DB role privileges
+  @@index([tenantId, createdAt])
+  @@index([tenantId, entityType, entityId])
+  @@map("audit_logs")
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// PHASE 1 ADDITIONS — Auth tokens
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Rotating refresh tokens — one active per session (SRS V2 NFR-004, SECURITY §3)
+model RefreshToken {
+  id       String @id @default(uuid()) @db.Uuid
+  userId   String @map("user_id") @db.Uuid
+  user     User   @relation(fields: [userId], references: [id])
+  tenantId String @map("tenant_id") @db.Uuid
+  tenant   Tenant @relation(fields: [tenantId], references: [id])
+
+  /// Hashed — never stored plain (SRS V2 NFR-003)
+  tokenHash  String  @unique @map("token_hash")
+  /// Rotation: each use issues a new token and invalidates this one
+  isRevoked  Boolean @default(false) @map("is_revoked")
+  /// Device / user-agent fingerprint for shared-device safety
+  deviceInfo String? @map("device_info")
+
+  expiresAt DateTime  @map("expires_at")
+  createdAt DateTime  @default(now()) @map("created_at")
+  revokedAt DateTime? @map("revoked_at")
+
+  @@index([userId, isRevoked])
+  @@map("refresh_tokens")
+}
+
+/// Single-use, time-limited password reset tokens (SRS V2 FR-115)
+model PasswordResetToken {
+  id        String    @id @default(uuid()) @db.Uuid
+  userId    String    @map("user_id") @db.Uuid
+  user      User      @relation(fields: [userId], references: [id])
+  tenantId  String    @map("tenant_id") @db.Uuid
+  tenant    Tenant    @relation(fields: [tenantId], references: [id])
+  tokenHash String    @unique @map("token_hash")
+  expiresAt DateTime  @map("expires_at")
+  usedAt    DateTime? @map("used_at")
+  createdAt DateTime  @default(now()) @map("created_at")
+
+  @@index([userId])
+  @@map("password_reset_tokens")
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// PHASE 2 — RESIDENTS, ADMISSIONS, AND BED ALLOCATIONS
+// CNIC is encrypted at rest and its keyed fingerprint is only used for uniqueness.
+// ─────────────────────────────────────────────────────────────────────────────
+
+model Resident {
+  id       String @id @default(uuid()) @db.Uuid
+  tenantId String @map("tenant_id") @db.Uuid
+  tenant   Tenant @relation(fields: [tenantId], references: [id])
+  branchId String @map("branch_id") @db.Uuid
+  branch   Branch @relation(fields: [branchId], references: [id])
+
+  firstName       String         @map("first_name")
+  lastName        String         @map("last_name")
+  phone           String?
+  email           String?
+  dateOfBirth     DateTime?      @map("date_of_birth") @db.Date
+  cnicEncrypted   String?        @map("cnic_encrypted")
+  cnicFingerprint String?        @unique @map("cnic_fingerprint")
+  userId          String?        @unique @map("user_id") @db.Uuid
+  user            User?          @relation(fields: [userId, tenantId], references: [id, tenantId], onDelete: Restrict)
+  status          ResidentStatus @default(ACTIVE)
+
+  createdAt DateTime  @default(now()) @map("created_at")
+  updatedAt DateTime  @updatedAt @map("updated_at")
+  deletedAt DateTime? @map("deleted_at")
+
+  admissions    Admission[]
+  allocations   BedAllocation[]
+  invoices      Invoice[]
+  visitorVisits VisitorVisit[]
+
+  @@unique([userId, tenantId])
+  @@index([tenantId, branchId, lastName, firstName])
+  @@index([tenantId, branchId, status, deletedAt])
+  @@map("residents")
+}
+
+model Admission {
+  id         String   @id @default(uuid()) @db.Uuid
+  tenantId   String   @map("tenant_id") @db.Uuid
+  tenant     Tenant   @relation(fields: [tenantId], references: [id])
+  branchId   String   @map("branch_id") @db.Uuid
+  branch     Branch   @relation(fields: [branchId], references: [id])
+  residentId String   @map("resident_id") @db.Uuid
+  resident   Resident @relation(fields: [residentId], references: [id])
+
+  status             AdmissionStatus @default(PENDING)
+  requestedCheckInAt DateTime?       @map("requested_check_in_at")
+  notes              String?
+  rejectionReason    String?         @map("rejection_reason")
+  decidedByUserId    String?         @map("decided_by_user_id") @db.Uuid
+  decidedBy          User?           @relation("AdmissionDecisionActor", fields: [decidedByUserId], references: [id])
+  decidedAt          DateTime?       @map("decided_at")
+  checkedInAt        DateTime?       @map("checked_in_at")
+  checkedOutAt       DateTime?       @map("checked_out_at")
+
+  createdAt DateTime  @default(now()) @map("created_at")
+  updatedAt DateTime  @updatedAt @map("updated_at")
+  deletedAt DateTime? @map("deleted_at")
+
+  allocations BedAllocation[]
+
+  @@index([tenantId, branchId, status, createdAt])
+  @@index([tenantId, residentId, createdAt])
+  @@map("admissions")
+}
+
+model BedAllocation {
+  id          String    @id @default(uuid()) @db.Uuid
+  tenantId    String    @map("tenant_id") @db.Uuid
+  tenant      Tenant    @relation(fields: [tenantId], references: [id])
+  branchId    String    @map("branch_id") @db.Uuid
+  branch      Branch    @relation(fields: [branchId], references: [id])
+  admissionId String    @map("admission_id") @db.Uuid
+  admission   Admission @relation(fields: [admissionId], references: [id])
+  residentId  String    @map("resident_id") @db.Uuid
+  resident    Resident  @relation(fields: [residentId], references: [id])
+  bedId       String    @map("bed_id") @db.Uuid
+  bed         Bed       @relation(fields: [bedId], references: [id])
+
+  status      AllocationStatus @default(RESERVED)
+  allocatedAt DateTime         @default(now()) @map("allocated_at")
+  checkedInAt DateTime?        @map("checked_in_at")
+  endedAt     DateTime?        @map("ended_at")
+
+  @@index([tenantId, branchId, status])
+  @@index([tenantId, residentId, status])
+  @@map("bed_allocations")
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// PHASE 3 — INVOICES, MANUAL PAYMENTS, AND REFUNDS
+// Monetary values are integer minor units in the tenant's currency.
+// ─────────────────────────────────────────────────────────────────────────────
+
+model Invoice {
+  id              String        @id @db.Uuid
+  tenantId        String        @map("tenant_id") @db.Uuid
+  tenant          Tenant        @relation(fields: [tenantId], references: [id])
+  branchId        String        @map("branch_id") @db.Uuid
+  branch          Branch        @relation(fields: [branchId], references: [id])
+  residentId      String        @map("resident_id") @db.Uuid
+  resident        Resident      @relation(fields: [residentId], references: [id])
+  invoiceNumber   String        @map("invoice_number")
+  currency        String
+  status          InvoiceStatus @default(ISSUED)
+  issuedAt        DateTime      @default(now()) @map("issued_at")
+  dueAt           DateTime?     @map("due_at")
+  notes           String?
+  createdByUserId String        @map("created_by_user_id") @db.Uuid
+  createdAt       DateTime      @default(now()) @map("created_at")
+  updatedAt       DateTime      @updatedAt @map("updated_at")
+  deletedAt       DateTime?     @map("deleted_at")
+
+  lines    InvoiceLine[]
+  payments Payment[]
+  refunds  Refund[]
+
+  @@unique([tenantId, invoiceNumber])
+  @@index([tenantId, branchId, status, issuedAt])
+  @@index([tenantId, residentId, issuedAt])
+  @@map("invoices")
+}
+
+model InvoiceLine {
+  id              String   @id @default(uuid()) @db.Uuid
+  tenantId        String   @map("tenant_id") @db.Uuid
+  branchId        String   @map("branch_id") @db.Uuid
+  invoiceId       String   @map("invoice_id") @db.Uuid
+  invoice         Invoice  @relation(fields: [invoiceId], references: [id])
+  description     String
+  quantity        Int
+  unitAmountMinor Int      @map("unit_amount_minor")
+  lineAmountMinor Int      @map("line_amount_minor")
+  createdAt       DateTime @default(now()) @map("created_at")
+
+  @@index([tenantId, branchId, invoiceId])
+  @@map("invoice_lines")
+}
+
+model Payment {
+  id               String        @id @default(uuid()) @db.Uuid
+  tenantId         String        @map("tenant_id") @db.Uuid
+  tenant           Tenant        @relation(fields: [tenantId], references: [id])
+  branchId         String        @map("branch_id") @db.Uuid
+  branch           Branch        @relation(fields: [branchId], references: [id])
+  invoiceId        String        @map("invoice_id") @db.Uuid
+  invoice          Invoice       @relation(fields: [invoiceId], references: [id])
+  amountMinor      Int           @map("amount_minor")
+  method           PaymentMethod
+  status           PaymentStatus @default(PENDING)
+  reference        String?
+  proofNotes       String?       @map("proof_notes")
+  submissionKey    String?       @map("submission_key") @db.Uuid
+  rejectionReason  String?       @map("rejection_reason")
+  proofFileName    String?       @map("proof_file_name")
+  proofMimeType    String?       @map("proof_mime_type")
+  proofData        Bytes?        @map("proof_data")
+  recordedByUserId String        @map("recorded_by_user_id") @db.Uuid
+  verifiedByUserId String?       @map("verified_by_user_id") @db.Uuid
+  verifiedAt       DateTime?     @map("verified_at")
+  createdAt        DateTime      @default(now()) @map("created_at")
+  updatedAt        DateTime      @updatedAt @map("updated_at")
+
+  @@unique([tenantId, branchId, invoiceId, recordedByUserId, submissionKey], map: "uq_payments_submission_key")
+  @@index([tenantId, branchId, invoiceId, status])
+  @@index([tenantId, branchId, createdAt])
+  @@map("payments")
+}
+
+model Refund {
+  id               String        @id @default(uuid()) @db.Uuid
+  tenantId         String        @map("tenant_id") @db.Uuid
+  tenant           Tenant        @relation(fields: [tenantId], references: [id])
+  branchId         String        @map("branch_id") @db.Uuid
+  branch           Branch        @relation(fields: [branchId], references: [id])
+  invoiceId        String        @map("invoice_id") @db.Uuid
+  invoice          Invoice       @relation(fields: [invoiceId], references: [id])
+  amountMinor      Int           @map("amount_minor")
+  method           PaymentMethod
+  reference        String?
+  notes            String?
+  submissionKey    String?       @map("submission_key") @db.Uuid
+  recordedByUserId String        @map("recorded_by_user_id") @db.Uuid
+  createdAt        DateTime      @default(now()) @map("created_at")
+
+  @@unique([tenantId, branchId, invoiceId, recordedByUserId, submissionKey], map: "uq_refunds_submission_key")
+  @@index([tenantId, branchId, invoiceId, createdAt])
+  @@map("refunds")
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// PHASE 4 — MESS MENUS, COMPLAINTS, AND BRANCH NOTICES
+// ─────────────────────────────────────────────────────────────────────────────
+
+model MessMenu {
+  id              String          @id @default(uuid()) @db.Uuid
+  tenantId        String          @map("tenant_id") @db.Uuid
+  tenant          Tenant          @relation(fields: [tenantId], references: [id])
+  branchId        String          @map("branch_id") @db.Uuid
+  branch          Branch          @relation(fields: [branchId], references: [id])
+  weekStart       DateTime        @map("week_start") @db.Date
+  createdByUserId String          @map("created_by_user_id") @db.Uuid
+  createdBy       User            @relation("MessMenuCreator", fields: [createdByUserId], references: [id])
+  entries         MessMenuEntry[]
+  createdAt       DateTime        @default(now()) @map("created_at")
+  updatedAt       DateTime        @updatedAt @map("updated_at")
+
+  @@unique([tenantId, branchId, weekStart])
+  @@index([tenantId, branchId, weekStart])
+  @@map("mess_menus")
+}
+
+model MessMenuEntry {
+  id          String       @id @default(uuid()) @db.Uuid
+  tenantId    String       @map("tenant_id") @db.Uuid
+  branchId    String       @map("branch_id") @db.Uuid
+  menuId      String       @map("menu_id") @db.Uuid
+  menu        MessMenu     @relation(fields: [menuId], references: [id], onDelete: Cascade)
+  dayOfWeek   Int          @map("day_of_week")
+  meal        MessMealType
+  description String
+  createdAt   DateTime     @default(now()) @map("created_at")
+
+  @@unique([menuId, dayOfWeek, meal])
+  @@index([tenantId, branchId, menuId])
+  @@map("mess_menu_entries")
+}
+
+model Complaint {
+  id                String            @id @default(uuid()) @db.Uuid
+  tenantId          String            @map("tenant_id") @db.Uuid
+  tenant            Tenant            @relation(fields: [tenantId], references: [id])
+  branchId          String            @map("branch_id") @db.Uuid
+  branch            Branch            @relation(fields: [branchId], references: [id])
+  title             String
+  description       String
+  status            ComplaintStatus   @default(OPEN)
+  priority          ComplaintPriority @default(NORMAL)
+  submittedByUserId String            @map("submitted_by_user_id") @db.Uuid
+  submittedBy       User              @relation("ComplaintSubmitter", fields: [submittedByUserId], references: [id])
+  assignedToUserId  String?           @map("assigned_to_user_id") @db.Uuid
+  assignedTo        User?             @relation("ComplaintAssignee", fields: [assignedToUserId], references: [id])
+  resolvedAt        DateTime?         @map("resolved_at")
+  createdAt         DateTime          @default(now()) @map("created_at")
+  updatedAt         DateTime          @updatedAt @map("updated_at")
+
+  @@index([tenantId, branchId, status, createdAt])
+  @@index([tenantId, submittedByUserId, createdAt])
+  @@map("complaints")
+}
+
+model Notice {
+  id              String       @id @default(uuid()) @db.Uuid
+  tenantId        String       @map("tenant_id") @db.Uuid
+  tenant          Tenant       @relation(fields: [tenantId], references: [id])
+  branchId        String       @map("branch_id") @db.Uuid
+  branch          Branch       @relation(fields: [branchId], references: [id])
+  title           String
+  body            String
+  status          NoticeStatus @default(DRAFT)
+  startsAt        DateTime?    @map("starts_at") @db.Date
+  endsAt          DateTime?    @map("ends_at") @db.Date
+  createdByUserId String       @map("created_by_user_id") @db.Uuid
+  createdBy       User         @relation("NoticeCreator", fields: [createdByUserId], references: [id])
+  publishedAt     DateTime?    @map("published_at")
+  createdAt       DateTime     @default(now()) @map("created_at")
+  updatedAt       DateTime     @updatedAt @map("updated_at")
+
+  @@index([tenantId, branchId, status, startsAt, endsAt])
+  @@map("notices")
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// PHASE 5 — MANUAL VISITOR REGISTRATION AND GATE WORKFLOWS
+// ─────────────────────────────────────────────────────────────────────────────
+
+model VisitorVisit {
+  id                 String             @id @default(uuid()) @db.Uuid
+  tenantId           String             @map("tenant_id") @db.Uuid
+  tenant             Tenant             @relation(fields: [tenantId], references: [id])
+  branchId           String             @map("branch_id") @db.Uuid
+  branch             Branch             @relation(fields: [branchId], references: [id])
+  hostResidentId     String             @map("host_resident_id") @db.Uuid
+  hostResident       Resident           @relation(fields: [hostResidentId], references: [id])
+  visitorName        String             @map("visitor_name")
+  visitorPhone       String?            @map("visitor_phone")
+  cnicEncrypted      String?            @map("cnic_encrypted")
+  cnicFingerprint    String?            @map("cnic_fingerprint")
+  purpose            String
+  status             VisitorVisitStatus @default(PENDING)
+  createdByUserId    String             @map("created_by_user_id") @db.Uuid
+  createdBy          User               @relation("VisitorVisitCreator", fields: [createdByUserId], references: [id])
+  approvedByUserId   String?            @map("approved_by_user_id") @db.Uuid
+  approvedBy         User?              @relation("VisitorVisitApprover", fields: [approvedByUserId], references: [id])
+  approvedAt         DateTime?          @map("approved_at")
+  checkedInByUserId  String?            @map("checked_in_by_user_id") @db.Uuid
+  checkedInBy        User?              @relation("VisitorVisitCheckInActor", fields: [checkedInByUserId], references: [id])
+  checkedInAt        DateTime?          @map("checked_in_at")
+  checkedOutByUserId String?            @map("checked_out_by_user_id") @db.Uuid
+  checkedOutBy       User?              @relation("VisitorVisitCheckOutActor", fields: [checkedOutByUserId], references: [id])
+  checkedOutAt       DateTime?          @map("checked_out_at")
+  createdAt          DateTime           @default(now()) @map("created_at")
+  updatedAt          DateTime           @updatedAt @map("updated_at")
+
+  @@index([tenantId, branchId, status, createdAt])
+  @@index([tenantId, branchId, visitorName, createdAt])
+  @@index([tenantId, cnicFingerprint])
+  @@index([tenantId, hostResidentId, createdAt])
+  @@map("visitor_visits")
+}

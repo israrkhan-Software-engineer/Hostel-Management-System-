@@ -1,0 +1,15 @@
+node_modules/
+dist/
+.next/
+*.env
+.env
+.env.local
+.env.*.local
+*.log
+coverage/
+.nyc_output/
+*.pem
+*.key
+.DS_Store
+Thumbs.db
+prisma/generated/

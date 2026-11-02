@@ -1,0 +1,152 @@
+name: HMS CI
+
+on:
+  pull_request:
+    branches: [main, develop]
+  push:
+    branches: [main, develop]
+
+jobs:
+  # ── Backend: lint, type-check, unit tests ──────────────────────────────────
+  backend-lint-type:
+    name: Backend — lint & typecheck
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: backend
+    env:
+      DATABASE_URL: postgresql://hms_app:ci_test_app_pw@localhost:5432/hms_test
+      DATABASE_MIGRATION_URL: postgresql://hms_test_user:hms_test_pw_ci@localhost:5432/hms_test
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: '20', cache: 'npm', cache-dependency-path: backend/package-lock.json }
+      - run: npm ci
+      - run: npm run db:generate
+      - run: node --check scripts/phase7-load-test.mjs && node --check scripts/phase7-restore-smoke.mjs
+      - run: npm run lint
+      - run: npm run typecheck
+
+  backend-unit:
+    name: Backend — unit tests
+    runs-on: ubuntu-latest
+    needs: backend-lint-type
+    defaults:
+      run:
+        working-directory: backend
+    env:
+      DATABASE_URL: postgresql://hms_app:ci_test_app_pw@localhost:5432/hms_test
+      DATABASE_MIGRATION_URL: postgresql://hms_test_user:hms_test_pw_ci@localhost:5432/hms_test
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: '20', cache: 'npm', cache-dependency-path: backend/package-lock.json }
+      - run: npm ci
+      - run: npm run db:generate
+      - run: npm test -- --coverage
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with: { name: backend-coverage, path: backend/coverage }
+
+  backend-integration:
+    name: Backend — integration tests (real PostgreSQL)
+    runs-on: ubuntu-latest
+    needs: backend-unit
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_DB: hms_test
+          POSTGRES_USER: hms_test_user
+          POSTGRES_PASSWORD: ${{ secrets.TEST_DB_PASSWORD || 'hms_test_pw_ci' }}
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+        ports: ['5432:5432']
+      redis:
+        image: redis:7
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+        ports: ['6379:6379']
+    defaults:
+      run:
+        working-directory: backend
+    env:
+      REDIS_URL: redis://localhost:6379
+      DATABASE_MIGRATION_URL: postgresql://hms_test_user:${{ secrets.TEST_DB_PASSWORD || 'hms_test_pw_ci' }}@localhost:5432/hms_test
+      DATABASE_URL: postgresql://hms_app:hms_test_app_pw@localhost:5432/hms_test
+      ALLOW_RLS_INTEGRATION_TESTS: 'true'
+      JWT_SECRET: ci_test_jwt_secret_minimum_32_chars_x
+      FIELD_ENCRYPTION_KEY: ci_test_field_key_32_chars_minimum_
+      NODE_ENV: test
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: '20', cache: 'npm', cache-dependency-path: backend/package-lock.json }
+      - run: npm ci
+      - run: psql "$DATABASE_MIGRATION_URL" -v ON_ERROR_STOP=1 -c "CREATE ROLE hms_app LOGIN PASSWORD 'hms_test_app_pw' NOSUPERUSER NOBYPASSRLS; GRANT CONNECT ON DATABASE hms_test TO hms_app; GRANT USAGE ON SCHEMA public TO hms_app"
+      - run: npm run db:generate
+      - run: npx prisma migrate deploy
+      - run: psql "$DATABASE_MIGRATION_URL" -v ON_ERROR_STOP=1 -c "DO \$\$ BEGIN IF has_table_privilege('hms_app','public.tenants','DELETE') OR has_table_privilege('hms_app','public.permissions','INSERT') OR has_table_privilege('hms_app','public.audit_logs','UPDATE') OR has_table_privilege('hms_app','public.platform_admins','INSERT') THEN RAISE EXCEPTION 'hms_app has unexpected elevated table privileges'; END IF; IF NOT has_table_privilege('hms_app','public.tenants','INSERT') OR NOT has_table_privilege('hms_app','public.tenants','UPDATE') OR NOT has_table_privilege('hms_app','public.platform_admins','UPDATE') OR NOT has_table_privilege('hms_app','public.platform_admin_audit_logs','INSERT') OR NOT has_table_privilege('hms_app','public.platform_admin_recovery_codes','INSERT') THEN RAISE EXCEPTION 'hms_app is missing required application table privileges'; END IF; END \$\$"
+      - run: npm run test:integration
+
+  phase7-restore-smoke:
+    name: Phase 7 — isolated backup/restore smoke test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: '20' }
+      - run: node backend/scripts/phase7-restore-smoke.mjs
+
+  # ── Frontend: lint, type-check, unit tests ─────────────────────────────────
+  frontend-lint-type:
+    name: Frontend — lint & typecheck
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: '20', cache: 'npm', cache-dependency-path: frontend/package-lock.json }
+      - run: npm ci
+      - run: npm run lint
+      - run: npm run typecheck
+
+  frontend-unit:
+    name: Frontend — unit tests
+    runs-on: ubuntu-latest
+    needs: frontend-lint-type
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: '20', cache: 'npm', cache-dependency-path: frontend/package-lock.json }
+      - run: npm ci
+      - run: npm test
+
+  # ── Security scans ─────────────────────────────────────────────────────────
+  security:
+    name: Security scans
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: '20' }
+      # Dependency audit — backend
+      - run: cd backend && npm ci && npm audit --audit-level=high
+      # Dependency audit — frontend
+      - run: cd frontend && npm ci && npm audit --audit-level=high
+      # Secret scan — no secrets committed (Phase 0 exit criterion)
+      - name: gitleaks secret scan
+        uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

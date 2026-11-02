@@ -1,0 +1,32 @@
+# Test compose — ephemeral DB and Redis per run; never uses production data
+services:
+  postgres-test:
+    image: postgres:${POSTGRES_VERSION:-16}
+    ports:
+      - "127.0.0.1:25432:5432"
+    environment:
+      POSTGRES_DB: hms_test
+      POSTGRES_USER: hms_test_user
+      POSTGRES_PASSWORD: hms_test_password
+      HMS_APP_PASSWORD: hms_test_app_password
+    networks:
+      - hms-test-net
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U hms_test_user -d hms_test"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  redis-test:
+    image: redis:${REDIS_VERSION:-7}
+    networks:
+      - hms-test-net
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+networks:
+  hms-test-net:
+    driver: bridge
