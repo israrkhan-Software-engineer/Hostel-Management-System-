@@ -57,3 +57,46 @@ export class CreateBedDto {
   @MaxLength(30)
   code!: string;
 }
+
+export class UpdateBuildingDto {
+  @IsOptional()
+  @IsString()
+  @MinLength(1)
+  @MaxLength(100)
+  name?: string;
+}
+
+export class UpdateFloorDto {
+  @IsOptional()
+  @IsInt()
+  @Min(-2)
+  @Max(100)
+  level?: number;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(100)
+  name?: string | null;
+}
+
+export class UpdateRoomDto {
+  @IsOptional()
+  @IsString()
+  @MinLength(1)
+  @MaxLength(30)
+  code?: string;
+
+  @IsOptional()
+  @IsInt()
+  @Min(1)
+  @Max(10)
+  bedCapacity?: number;
+}
+
+export class UpdateBedDto {
+  @IsOptional()
+  @IsString()
+  @MinLength(1)
+  @MaxLength(30)
+  code?: string;
+}

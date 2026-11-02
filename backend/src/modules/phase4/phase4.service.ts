@@ -14,6 +14,7 @@ import {
   UpdateComplaintDto,
   UpdateNoticeDto,
 } from './phase4.dto';
+import { hasPrismaErrorCode } from '../../common/utils/prisma-error.util';
 
 const complaintSelect = {
   id: true,
@@ -125,17 +126,59 @@ export class Phase4Service {
     const title = dto.title.trim();
     const description = dto.description.trim();
     if (!title || !description) throw new BadRequestException('Title and description are required');
-    const complaint = await this.prisma.complaint.create({
-      data: {
-        tenantId,
-        branchId,
-        title,
-        description,
-        priority: dto.priority ?? 'NORMAL',
-        submittedByUserId: actorUserId,
-      },
-      select: complaintSelect,
-    });
+    const priority = dto.priority ?? 'NORMAL';
+    const existing = dto.clientMutationId
+      ? await this.prisma.complaint.findFirst({
+          where: {
+            tenantId,
+            branchId,
+            submittedByUserId: actorUserId,
+            clientMutationId: dto.clientMutationId,
+          },
+          select: { id: true, title: true, description: true, priority: true, deletedAt: true },
+        })
+      : null;
+    if (existing) {
+      if (existing.deletedAt || existing.title !== title || existing.description !== description || existing.priority !== priority) {
+        throw new ConflictException('This offline complaint submission key was already used');
+      }
+      return this.prisma.complaint.findFirstOrThrow({
+        where: { id: existing.id, tenantId, branchId, deletedAt: null },
+        select: complaintSelect,
+      });
+    }
+
+    let complaint: Prisma.ComplaintGetPayload<{ select: typeof complaintSelect }>;
+    try {
+      complaint = await this.prisma.complaint.create({
+        data: {
+          tenantId,
+          branchId,
+          title,
+          description,
+          priority,
+          submittedByUserId: actorUserId,
+          ...(dto.clientMutationId ? { clientMutationId: dto.clientMutationId } : {}),
+        },
+        select: complaintSelect,
+      });
+    } catch (error) {
+      if (!dto.clientMutationId || !hasPrismaErrorCode(error, 'P2002')) throw error;
+      const replay = await this.prisma.complaint.findFirst({
+        where: {
+          tenantId,
+          branchId,
+          submittedByUserId: actorUserId,
+          clientMutationId: dto.clientMutationId,
+          deletedAt: null,
+        },
+        select: complaintSelect,
+      });
+      if (!replay || replay.title !== title || replay.description !== description || replay.priority !== priority) {
+        throw new ConflictException('This offline complaint submission key was already used');
+      }
+      return replay;
+    }
     await this.audit.log({
       tenantId,
       branchId,
@@ -152,7 +195,7 @@ export class Phase4Service {
   async listMyComplaints(tenantId: string, branchId: string, actorUserId: string) {
     await this.ensureBranch(tenantId, branchId);
     return this.prisma.complaint.findMany({
-      where: { tenantId, branchId, submittedByUserId: actorUserId },
+      where: { tenantId, branchId, submittedByUserId: actorUserId, deletedAt: null },
       orderBy: { createdAt: 'desc' },
       take: 100,
       select: complaintSelect,
@@ -162,7 +205,7 @@ export class Phase4Service {
   async listComplaintQueue(tenantId: string, branchId: string) {
     await this.ensureBranch(tenantId, branchId);
     return this.prisma.complaint.findMany({
-      where: { tenantId, branchId },
+      where: { tenantId, branchId, deletedAt: null },
       orderBy: [{ status: 'asc' }, { createdAt: 'desc' }],
       take: 200,
       select: complaintSelect,
@@ -176,7 +219,7 @@ export class Phase4Service {
     complaintId: string,
   ) {
     const complaint = await this.prisma.complaint.findFirst({
-      where: { id: complaintId, tenantId, branchId },
+      where: { id: complaintId, tenantId, branchId, deletedAt: null },
       select: complaintSelect,
     });
     if (!complaint) throw new NotFoundException('Complaint not found');
@@ -186,12 +229,23 @@ export class Phase4Service {
     if (complaint.assignedToUserId && complaint.assignedToUserId !== actorUserId) {
       throw new ConflictException('Complaint is already assigned to another staff member');
     }
-    const updated = await this.prisma.complaint.update({
-      where: { id: complaintId },
+    const result = await this.prisma.complaint.updateMany({
+      where: {
+        id: complaintId,
+        tenantId,
+        branchId,
+        deletedAt: null,
+        status: complaint.status,
+        assignedToUserId: complaint.assignedToUserId,
+      },
       data: {
         assignedToUserId: actorUserId,
         status: complaint.status === 'OPEN' ? 'IN_PROGRESS' : complaint.status,
       },
+    });
+    if (result.count !== 1) throw new ConflictException('Complaint was changed by another staff member');
+    const updated = await this.prisma.complaint.findFirstOrThrow({
+      where: { id: complaintId, tenantId, branchId, deletedAt: null },
       select: complaintSelect,
     });
     await this.audit.log({
@@ -217,7 +271,7 @@ export class Phase4Service {
     dto: UpdateComplaintDto,
   ) {
     const current = await this.prisma.complaint.findFirst({
-      where: { id: complaintId, tenantId, branchId },
+      where: { id: complaintId, tenantId, branchId, deletedAt: null },
       select: complaintSelect,
     });
     if (!current) throw new NotFoundException('Complaint not found');
@@ -225,8 +279,14 @@ export class Phase4Service {
     if (dto.status === 'CLOSED' && current.status !== 'RESOLVED') {
       throw new ConflictException('A complaint must be resolved before it can be closed');
     }
-    const updated = await this.prisma.complaint.update({
-      where: { id: complaintId },
+    const result = await this.prisma.complaint.updateMany({
+      where: {
+        id: complaintId,
+        tenantId,
+        branchId,
+        deletedAt: null,
+        status: current.status,
+      },
       data: {
         ...(dto.status !== undefined ? { status: dto.status } : {}),
         ...(dto.priority !== undefined ? { priority: dto.priority } : {}),
@@ -236,6 +296,10 @@ export class Phase4Service {
             ? { resolvedAt: null }
             : {}),
       },
+    });
+    if (result.count !== 1) throw new ConflictException('Complaint was changed by another staff member');
+    const updated = await this.prisma.complaint.findFirstOrThrow({
+      where: { id: complaintId, tenantId, branchId, deletedAt: null },
       select: complaintSelect,
     });
     await this.audit.log({
@@ -251,6 +315,47 @@ export class Phase4Service {
       outcome: 'success',
     });
     return updated;
+  }
+
+  async archiveComplaint(
+    tenantId: string,
+    branchId: string,
+    actorUserId: string,
+    complaintId: string,
+  ) {
+    await this.ensureBranch(tenantId, branchId);
+    const complaint = await this.prisma.complaint.findFirst({
+      where: { id: complaintId, tenantId, branchId, deletedAt: null },
+      select: { id: true, status: true },
+    });
+    if (!complaint) throw new NotFoundException('Complaint not found');
+    if (complaint.status !== 'RESOLVED' && complaint.status !== 'CLOSED') {
+      throw new ConflictException('Only resolved or closed complaints can be archived');
+    }
+    const deletedAt = new Date();
+    const result = await this.prisma.complaint.updateMany({
+      where: {
+        id: complaintId,
+        tenantId,
+        branchId,
+        deletedAt: null,
+        status: complaint.status,
+      },
+      data: { deletedAt },
+    });
+    if (result.count !== 1) throw new ConflictException('Complaint was changed by another staff member');
+    await this.audit.log({
+      tenantId,
+      branchId,
+      actorUserId,
+      action: 'complaint.archive',
+      module: 'complaints',
+      entityType: 'complaint',
+      entityId: complaintId,
+      beforeData: { status: complaint.status },
+      outcome: 'success',
+    });
+    return { id: complaintId, archivedAt: deletedAt };
   }
 
   async listPublishedNotices(tenantId: string, branchId: string) {

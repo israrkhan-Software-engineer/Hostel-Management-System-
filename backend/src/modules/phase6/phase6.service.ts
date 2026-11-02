@@ -10,6 +10,7 @@ export type OfflineStatusResponse = {
   cacheEnabled: true;
   syncRequired: true;
   allowedData: string[];
+  queueableActions: string[];
   blockedActions: string[];
   summary: string;
   lastCheckedAt: string;
@@ -49,18 +50,17 @@ export class Phase6Service {
       cacheEnabled: true,
       syncRequired: true,
       allowedData: ['dashboard-counts'],
+      queueableActions: ['student-complaint-submission'],
       blockedActions: [
-        'create',
-        'update',
-        'delete',
-        'approve',
-        'check-in',
-        'check-out',
+        'admissions',
+        'inventory',
+        'complaint-management',
+        'visitor-workflow',
         'payment',
         'refund',
       ],
       summary:
-        'Aggregate branch dashboard counts are cached in the current browser session. Offline writes are blocked and never queued; refresh the snapshot only while online.',
+        'Aggregate branch dashboard counts are cached in the current browser session. Student complaint submissions may be queued in session storage with an idempotency key; all other writes are blocked offline.',
       lastCheckedAt: new Date().toISOString(),
     };
   }

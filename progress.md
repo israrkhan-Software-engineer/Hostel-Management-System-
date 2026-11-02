@@ -2,6 +2,19 @@
 
 Execution is sequential. No database reset or destructive migration command is used.
 
+## Addendum — 2026-11-02 (local-only follow-up)
+
+This update supersedes the earlier scope note that admission/inventory/complaint/visitor CRUD was unapproved. The user approved pending-only admission edit/cancel, dependency-checked inventory updates and soft archive, resolved/closed complaint archive, rejected/checked-out visitor archive, and a complaint-only offline outbox. Biometrics remain excluded; visitor hours and retention/backup policies remain deferred.
+
+- Added the local API/UI paths, permission checks, audit entries, a complaint outbox in browser session storage, server-side complaint idempotency, and an additive Prisma migration for idempotency and archive timestamps.
+- The new migration is not applied to any database. No live DB, authenticated account, hosted CI, staging, or production environment was accessed.
+- Local validation: backend 20 suites / 154 tests, frontend 6 suites / 23 tests, backend/frontend typecheck and lint, Prisma validation, and backend/frontend production builds pass.
+- Rebuilt and inspected the workspace-root `HMS_Phase1.zip`; it includes current source/docs and excludes environment secrets, dependencies, and generated build output.
+- Started a separate disposable PostgreSQL/Redis test stack, applied all migrations, and passed both integration suites (15/15 tests). The two failures from the earlier historical integration run did not reproduce; the tenant-local overdue-midnight boundary and concurrent admission checks passed.
+- Ran `backend/scripts/phase7-restore-smoke.mjs`; synthetic PostgreSQL dump/restore passed in its own disposable container, with no HMS application data used. Test services and container were cleaned up.
+- These checks do not apply the new migration to a persistent HMS database, verify hosted CI, or certify backup recovery for real application/object-store data.
+- The prior notes about the legacy visitor row, backup/retention, BullMQ, MFA acceptance, and production pilot remain external blockers. The two tenant integration startup failures were not reproduced in the latest disposable local run; hosted-CI confirmation remains open.
+
 ## Task 1 — PostgreSQL RLS & Tenant Isolation
 
 **Status: COMPLETED**

@@ -123,6 +123,17 @@ export class CreateAdmissionDto {
   notes?: string;
 }
 
+export class UpdateAdmissionDto {
+  @IsOptional()
+  @IsDateString()
+  requestedCheckInAt?: string | null;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(2000)
+  notes?: string | null;
+}
+
 export class AdmissionDecisionDto {
   @Matches(/^(APPROVED|REJECTED)$/)
   decision!: 'APPROVED' | 'REJECTED';

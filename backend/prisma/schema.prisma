@@ -856,11 +856,15 @@ model Complaint {
   assignedToUserId  String?           @map("assigned_to_user_id") @db.Uuid
   assignedTo        User?             @relation("ComplaintAssignee", fields: [assignedToUserId], references: [id])
   resolvedAt        DateTime?         @map("resolved_at")
+  clientMutationId  String?           @map("client_mutation_id") @db.Uuid
   createdAt         DateTime          @default(now()) @map("created_at")
   updatedAt         DateTime          @updatedAt @map("updated_at")
+  deletedAt         DateTime?         @map("deleted_at")
 
+  @@unique([tenantId, submittedByUserId, clientMutationId], map: "uq_complaints_offline_submission")
   @@index([tenantId, branchId, status, createdAt])
   @@index([tenantId, submittedByUserId, createdAt])
+  @@index([tenantId, branchId, deletedAt])
   @@map("complaints")
 }
 
@@ -916,10 +920,12 @@ model VisitorVisit {
   checkedOutAt       DateTime?          @map("checked_out_at")
   createdAt          DateTime           @default(now()) @map("created_at")
   updatedAt          DateTime           @updatedAt @map("updated_at")
+  deletedAt          DateTime?          @map("deleted_at")
 
   @@index([tenantId, branchId, status, createdAt])
   @@index([tenantId, branchId, visitorName, createdAt])
   @@index([tenantId, cnicFingerprint])
   @@index([tenantId, hostResidentId, createdAt])
+  @@index([tenantId, branchId, deletedAt])
   @@map("visitor_visits")
 }

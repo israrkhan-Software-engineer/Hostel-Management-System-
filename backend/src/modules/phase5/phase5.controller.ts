@@ -1,4 +1,4 @@
-import { Body, Controller, Get, Param, ParseUUIDPipe, Post, Query } from '@nestjs/common';
+import { Body, Controller, Delete, Get, Param, ParseUUIDPipe, Post, Query } from '@nestjs/common';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import { BranchScoped } from '../../common/decorators/branch-scoped.decorator';
 import { CurrentUser, RequestUser } from '../../common/decorators/current-user.decorator';
@@ -31,6 +31,16 @@ export class Phase5Controller {
     @Body() dto: CreateVisitorVisitDto,
   ) {
     return this.phase5.createVisitorVisit(user.tenantId, branchId, user.userId, dto);
+  }
+
+  @Delete('visitors/:visitId')
+  @RequirePermission('visitors', 'delete')
+  archiveVisitorVisit(
+    @Param('branchId', ParseUUIDPipe) branchId: string,
+    @Param('visitId', ParseUUIDPipe) visitId: string,
+    @CurrentUser() user: RequestUser,
+  ) {
+    return this.phase5.archiveVisitorVisit(user.tenantId, branchId, user.userId, visitId);
   }
 
   @Post('visitors/:visitId/approve')

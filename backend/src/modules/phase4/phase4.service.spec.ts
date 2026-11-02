@@ -13,7 +13,14 @@ describe('Phase4Service', () => {
       },
       messMenu: { upsert: jest.fn(), findFirst: jest.fn(), findMany: jest.fn() },
       messMenuEntry: { deleteMany: jest.fn(), createMany: jest.fn() },
-      complaint: { create: jest.fn(), findFirst: jest.fn(), findMany: jest.fn(), update: jest.fn() },
+      complaint: {
+        create: jest.fn(),
+        findFirst: jest.fn(),
+        findFirstOrThrow: jest.fn(),
+        findMany: jest.fn(),
+        update: jest.fn(),
+        updateMany: jest.fn(),
+      },
       notice: { findMany: jest.fn(), findFirst: jest.fn(), create: jest.fn(), update: jest.fn() },
       $transaction: jest.fn(),
     };
@@ -86,8 +93,31 @@ describe('Phase4Service', () => {
         tenantId: 'tenant-1',
         branchId: 'branch-1',
         submittedByUserId: 'resident-1',
+        deletedAt: null,
       },
     }));
+  });
+
+  it('replays an identical offline complaint submission without creating a duplicate', async () => {
+    prisma.complaint.findFirst.mockResolvedValue({
+      id: 'complaint-1',
+      title: 'Water leak',
+      description: 'The shower is leaking.',
+      priority: 'NORMAL',
+      deletedAt: null,
+    });
+    const saved = { id: 'complaint-1', title: 'Water leak', status: 'OPEN' };
+    prisma.complaint.findFirstOrThrow.mockResolvedValue(saved);
+
+    await expect(service.createComplaint('tenant-1', 'branch-1', 'resident-1', {
+      title: ' Water leak ',
+      description: ' The shower is leaking. ',
+      priority: 'NORMAL' as any,
+      clientMutationId: '4c89d50b-5aa9-4b74-99ec-3b52d2179e0a',
+    })).resolves.toEqual(saved);
+
+    expect(prisma.complaint.create).not.toHaveBeenCalled();
+    expect(audit.log).not.toHaveBeenCalled();
   });
 
   it('claims unassigned complaints and prevents stealing another staff member assignment', async () => {
@@ -97,14 +127,16 @@ describe('Phase4Service', () => {
       assignedToUserId: null,
     };
     prisma.complaint.findFirst.mockResolvedValue(openComplaint);
-    prisma.complaint.update.mockResolvedValue({
+    prisma.complaint.updateMany.mockResolvedValue({ count: 1 });
+    prisma.complaint.findFirstOrThrow.mockResolvedValue({
       ...openComplaint,
       status: 'IN_PROGRESS',
       assignedToUserId: 'staff-1',
     });
 
     await service.assignComplaintToSelf('tenant-1', 'branch-1', 'staff-1', 'complaint-1');
-    expect(prisma.complaint.update).toHaveBeenCalledWith(expect.objectContaining({
+    expect(prisma.complaint.updateMany).toHaveBeenCalledWith(expect.objectContaining({
+      where: expect.objectContaining({ deletedAt: null, status: 'OPEN' }),
       data: { assignedToUserId: 'staff-1', status: 'IN_PROGRESS' },
     }));
 
@@ -127,6 +159,28 @@ describe('Phase4Service', () => {
       status: 'CLOSED' as any,
     })).rejects.toThrow(ConflictException);
     expect(prisma.complaint.update).not.toHaveBeenCalled();
+  });
+
+  it('archives resolved complaints without physically deleting them', async () => {
+    prisma.complaint.findFirst.mockResolvedValue({ id: 'complaint-1', status: 'RESOLVED' });
+    prisma.complaint.updateMany.mockResolvedValue({ count: 1 });
+
+    await expect(service.archiveComplaint('tenant-1', 'branch-1', 'staff-1', 'complaint-1'))
+      .resolves.toEqual({ id: 'complaint-1', archivedAt: expect.any(Date) });
+
+    expect(prisma.complaint.updateMany).toHaveBeenCalledWith(expect.objectContaining({
+      where: {
+        id: 'complaint-1',
+        tenantId: 'tenant-1',
+        branchId: 'branch-1',
+        deletedAt: null,
+        status: 'RESOLVED',
+      },
+      data: { deletedAt: expect.any(Date) },
+    }));
+    expect(audit.log).toHaveBeenCalledWith(expect.objectContaining({
+      action: 'complaint.archive',
+    }));
   });
 
   it('returns only currently published notices for the tenant-local date', async () => {

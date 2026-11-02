@@ -38,6 +38,7 @@ describe('Phase5Service', () => {
       where: {
         tenantId: 'tenant-1',
         branchId: 'branch-1',
+        deletedAt: null,
         OR: [
           { visitorName: { contains: 'Sam', mode: 'insensitive' } },
           { visitorPhone: { contains: 'Sam', mode: 'insensitive' } },
@@ -154,7 +155,7 @@ describe('Phase5Service', () => {
     await expect(service.approveVisitorVisit('tenant-1', 'branch-1', 'warden-1', 'visit-1'))
       .resolves.toEqual(visit);
     expect(prisma.visitorVisit.updateMany).toHaveBeenCalledWith(expect.objectContaining({
-      where: { id: 'visit-1', tenantId: 'tenant-1', branchId: 'branch-1', status: 'PENDING' },
+      where: { id: 'visit-1', tenantId: 'tenant-1', branchId: 'branch-1', status: 'PENDING', deletedAt: null },
       data: expect.objectContaining({
         status: 'APPROVED',
         approvedByUserId: 'warden-1',
@@ -187,6 +188,28 @@ describe('Phase5Service', () => {
         checkedOutByUserId: 'security-1',
         checkedOutAt: expect.any(Date),
       }),
+    }));
+  });
+
+  it('archives completed visits and preserves their records', async () => {
+    prisma.visitorVisit.findFirst.mockResolvedValue({ id: 'visit-1', status: 'CHECKED_OUT' });
+    prisma.visitorVisit.updateMany.mockResolvedValue({ count: 1 });
+
+    await expect(service.archiveVisitorVisit('tenant-1', 'branch-1', 'staff-1', 'visit-1'))
+      .resolves.toEqual({ id: 'visit-1', archivedAt: expect.any(Date) });
+
+    expect(prisma.visitorVisit.updateMany).toHaveBeenCalledWith(expect.objectContaining({
+      where: {
+        id: 'visit-1',
+        tenantId: 'tenant-1',
+        branchId: 'branch-1',
+        deletedAt: null,
+        status: 'CHECKED_OUT',
+      },
+      data: { deletedAt: expect.any(Date) },
+    }));
+    expect(audit.log).toHaveBeenCalledWith(expect.objectContaining({
+      action: 'visitor.archive',
     }));
   });
 

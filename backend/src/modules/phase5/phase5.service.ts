@@ -62,6 +62,7 @@ export class Phase5Service {
       where: {
         tenantId,
         branchId,
+        deletedAt: null,
         ...(query
           ? {
               OR: [
@@ -186,6 +187,48 @@ export class Phase5Service {
     );
   }
 
+  async archiveVisitorVisit(
+    tenantId: string,
+    branchId: string,
+    actorUserId: string,
+    visitId: string,
+  ) {
+    await this.ensureBranch(tenantId, branchId);
+    const visit = await this.prisma.visitorVisit.findFirst({
+      where: { id: visitId, tenantId, branchId, deletedAt: null },
+      select: { id: true, status: true },
+    });
+    if (!visit) throw new NotFoundException('Visitor visit not found');
+    if (visit.status !== 'REJECTED' && visit.status !== 'CHECKED_OUT') {
+      throw new ConflictException('Only rejected or completed visits can be archived');
+    }
+
+    const deletedAt = new Date();
+    const result = await this.prisma.visitorVisit.updateMany({
+      where: {
+        id: visitId,
+        tenantId,
+        branchId,
+        deletedAt: null,
+        status: visit.status,
+      },
+      data: { deletedAt },
+    });
+    if (result.count !== 1) throw new ConflictException('Visitor visit was changed by another staff member');
+    await this.audit.log({
+      tenantId,
+      branchId,
+      actorUserId,
+      action: 'visitor.archive',
+      module: 'visitors',
+      entityType: 'visitor_visit',
+      entityId: visitId,
+      beforeData: { status: visit.status },
+      outcome: 'success',
+    });
+    return { id: visitId, archivedAt: deletedAt };
+  }
+
   private async transitionVisitorVisit(
     tenantId: string,
     branchId: string,
@@ -197,7 +240,7 @@ export class Phase5Service {
     action: string,
   ) {
     const current = await this.prisma.visitorVisit.findFirst({
-      where: { id: visitId, tenantId, branchId },
+      where: { id: visitId, tenantId, branchId, deletedAt: null },
       select: visitorVisitSelect,
     });
     if (!current) throw new NotFoundException('Visitor visit not found');
@@ -206,14 +249,14 @@ export class Phase5Service {
     }
 
     const result = await this.prisma.visitorVisit.updateMany({
-      where: { id: visitId, tenantId, branchId, status: requiredStatus },
+      where: { id: visitId, tenantId, branchId, status: requiredStatus, deletedAt: null },
       data: { status: nextStatus, ...extraData },
     });
     if (result.count !== 1) {
       throw new ConflictException('Visitor visit was changed by another staff member');
     }
     const updated = await this.prisma.visitorVisit.findFirstOrThrow({
-      where: { id: visitId, tenantId, branchId },
+      where: { id: visitId, tenantId, branchId, deletedAt: null },
       select: visitorVisitSelect,
     });
     await this.audit.log({

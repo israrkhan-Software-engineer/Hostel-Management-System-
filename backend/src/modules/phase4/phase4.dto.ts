@@ -12,6 +12,7 @@ import {
   MaxLength,
   Min,
   MinLength,
+  IsUUID,
   ValidateNested,
 } from 'class-validator';
 import { ComplaintPriority, ComplaintStatus, MessMealType, NoticeStatus } from '@prisma/client';
@@ -57,6 +58,10 @@ export class CreateComplaintDto {
   @IsOptional()
   @IsEnum(ComplaintPriority)
   priority?: ComplaintPriority;
+
+  @IsOptional()
+  @IsUUID()
+  clientMutationId?: string;
 }
 
 export class UpdateComplaintDto {

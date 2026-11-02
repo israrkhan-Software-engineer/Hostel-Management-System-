@@ -17,6 +17,7 @@ import {
   AdmissionFilterDto,
   AllocateBedDto,
   CreateAdmissionDto,
+  UpdateAdmissionDto,
 } from './residents.dto';
 import { AdmissionsService } from './admissions.service';
 
@@ -54,6 +55,33 @@ export class AdmissionsController {
     @Body() dto: CreateAdmissionDto,
   ) {
     return this.admissions.create(user.tenantId, branchId, user.userId, dto);
+  }
+
+  @Patch(':admissionId')
+  @RequirePermission('admissions', 'edit')
+  update(
+    @Param('branchId', ParseUUIDPipe) branchId: string,
+    @Param('admissionId', ParseUUIDPipe) admissionId: string,
+    @CurrentUser() user: RequestUser,
+    @Body() dto: UpdateAdmissionDto,
+  ) {
+    return this.admissions.update(
+      user.tenantId,
+      branchId,
+      user.userId,
+      admissionId,
+      dto,
+    );
+  }
+
+  @Post(':admissionId/cancel')
+  @RequirePermission('admissions', 'edit')
+  cancel(
+    @Param('branchId', ParseUUIDPipe) branchId: string,
+    @Param('admissionId', ParseUUIDPipe) admissionId: string,
+    @CurrentUser() user: RequestUser,
+  ) {
+    return this.admissions.cancel(user.tenantId, branchId, user.userId, admissionId);
   }
 
   @Patch(':admissionId/decision')

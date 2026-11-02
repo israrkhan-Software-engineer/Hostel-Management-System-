@@ -93,6 +93,55 @@ describe('AdmissionsService', () => {
     expect(audit.log).not.toHaveBeenCalled();
   });
 
+  it('updates pending admission notes and audits the edit', async () => {
+    prisma.admission.updateMany.mockResolvedValue({ count: 1 });
+    const get = jest.spyOn(service, 'get').mockResolvedValue({ id: 'admission-1' } as any);
+
+    await expect(service.update('tenant-1', 'branch-1', 'user-1', 'admission-1', {
+      notes: '  Updated notes  ',
+    })).resolves.toEqual({ id: 'admission-1' });
+
+    expect(prisma.admission.updateMany).toHaveBeenCalledWith(expect.objectContaining({
+      where: expect.objectContaining({ status: 'PENDING', deletedAt: null }),
+      data: { notes: 'Updated notes' },
+    }));
+    expect(audit.log).toHaveBeenCalledWith(expect.objectContaining({
+      action: 'admission.update',
+      actorUserId: 'user-1',
+    }));
+    expect(get).toHaveBeenCalledWith('tenant-1', 'branch-1', 'admission-1');
+  });
+
+  it('cancels only pending admissions and records the actor', async () => {
+    prisma.admission.updateMany.mockResolvedValue({ count: 1 });
+    jest.spyOn(service, 'get').mockResolvedValue({ id: 'admission-1', status: 'CANCELLED' } as any);
+
+    await service.cancel('tenant-1', 'branch-1', 'user-1', 'admission-1');
+
+    expect(prisma.admission.updateMany).toHaveBeenCalledWith(expect.objectContaining({
+      where: expect.objectContaining({ status: 'PENDING', deletedAt: null }),
+      data: expect.objectContaining({
+        status: 'CANCELLED',
+        decidedByUserId: 'user-1',
+        decidedAt: expect.any(Date),
+      }),
+    }));
+    expect(audit.log).toHaveBeenCalledWith(expect.objectContaining({
+      action: 'admission.cancel',
+      actorUserId: 'user-1',
+    }));
+  });
+
+  it('does not edit an admission after its pending state has changed', async () => {
+    prisma.admission.updateMany.mockResolvedValue({ count: 0 });
+    prisma.admission.findFirst.mockResolvedValue({ id: 'admission-1' });
+
+    await expect(service.update('tenant-1', 'branch-1', 'user-1', 'admission-1', {
+      notes: 'Updated notes',
+    })).rejects.toThrow(ConflictException);
+    expect(audit.log).not.toHaveBeenCalled();
+  });
+
   it('checks in an approved admission and atomically occupies its bed', async () => {
     const admission = {
       id: 'admission-1',

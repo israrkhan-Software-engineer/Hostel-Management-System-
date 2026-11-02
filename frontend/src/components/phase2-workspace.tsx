@@ -28,12 +28,13 @@ type Admission = {
   id: string;
   status: string;
   requestedCheckInAt: string | null;
+  notes: string | null;
   rejectionReason: string | null;
   resident: Resident;
   allocations: { status: string; bed: { code: string; room: { code: string } } }[];
 };
 type Bed = { id: string; code: string; room: { id: string; code: string } };
-type Room = { id: string; code: string; floor: { id: string; name: string | null; level: number; building: { id: string; name: string } } };
+type Room = { id: string; code: string; bedCapacity: number; floor: { id: string; name: string | null; level: number; building: { id: string; name: string } } };
 type Floor = { id: string; level: number; name: string | null; rooms: { id: string; code: string }[] };
 type Building = { id: string; name: string; floors: Floor[] };
 type InvoiceLine = { id: string; description: string; quantity: number; unitAmountMinor: number; lineAmountMinor: number };
@@ -119,6 +120,7 @@ type OfflineStatus = {
   cacheEnabled: boolean;
   syncRequired: boolean;
   allowedData: string[];
+  queueableActions: string[];
   blockedActions: string[];
   summary: string;
   lastCheckedAt: string;
@@ -487,7 +489,7 @@ export default function Phase2Workspace() {
 
   async function refreshOfflineStatus() {
     if (!branchId || !isOnline || !navigator.onLine) {
-      setError('Sync check is unavailable offline. No changes are queued.');
+      setError('Sync check is unavailable offline. Staff changes are not queued; student complaint submissions queue in the student portal.');
       return;
     }
     const response = await apiRequest<OfflineStatus>(`/branches/${branchId}/offline/sync-check`, { method: 'POST' });
@@ -783,6 +785,22 @@ export default function Phase2Workspace() {
     }, decision === 'APPROVED' ? 'Admission approved.' : 'Admission rejected.');
   }
 
+  async function editAdmission(admission: Admission) {
+    const notes = window.prompt('Edit admission notes. Leave blank to clear them.', admission.notes ?? '');
+    if (notes === null) return;
+    await mutate<Admission>(`/branches/${branchId}/admissions/${admission.id}`, {
+      method: 'PATCH',
+      body: JSON.stringify({ notes }),
+    }, 'Admission updated.');
+  }
+
+  async function cancelAdmission(admission: Admission) {
+    if (!window.confirm('Cancel this pending admission? This cannot be undone.')) return;
+    await mutate<Admission>(`/branches/${branchId}/admissions/${admission.id}/cancel`, {
+      method: 'POST',
+    }, 'Pending admission cancelled.');
+  }
+
   async function allocateBed(admissionId: string, bedId: string) {
     if (!bedId) return;
     await mutate(`/branches/${branchId}/admissions/${admissionId}/allocation`, {
@@ -828,6 +846,77 @@ export default function Phase2Workspace() {
     }
   }
 
+  async function editBuilding(building: Building) {
+    const name = window.prompt('Building name', building.name);
+    if (name === null) return;
+    await mutate(`/branches/${branchId}/inventory/buildings/${building.id}`, {
+      method: 'PATCH',
+      body: JSON.stringify({ name }),
+    }, 'Building updated.');
+  }
+
+  async function archiveBuilding(building: Building) {
+    if (!window.confirm(`Archive ${building.name}? Archive its floors first.`)) return;
+    await mutate(`/branches/${branchId}/inventory/buildings/${building.id}`, {
+      method: 'DELETE',
+    }, 'Building archived.');
+  }
+
+  async function editFloor(floor: Floor) {
+    const name = window.prompt('Floor name; leave blank to remove the name.', floor.name ?? '');
+    if (name === null) return;
+    await mutate(`/branches/${branchId}/inventory/floors/${floor.id}`, {
+      method: 'PATCH',
+      body: JSON.stringify({ name }),
+    }, 'Floor updated.');
+  }
+
+  async function archiveFloor(floor: Floor) {
+    if (!window.confirm('Archive this floor? Archive its rooms first.')) return;
+    await mutate(`/branches/${branchId}/inventory/floors/${floor.id}`, {
+      method: 'DELETE',
+    }, 'Floor archived.');
+  }
+
+  async function editRoom(room: Room) {
+    const code = window.prompt('Room code', room.code);
+    if (code === null) return;
+    const capacity = window.prompt('Bed capacity (1–10)', String(room.bedCapacity));
+    if (capacity === null) return;
+    const bedCapacity = Number(capacity);
+    if (!Number.isInteger(bedCapacity) || bedCapacity < 1 || bedCapacity > 10) {
+      setError('Bed capacity must be a whole number from 1 to 10.');
+      return;
+    }
+    await mutate(`/branches/${branchId}/inventory/rooms/${room.id}`, {
+      method: 'PATCH',
+      body: JSON.stringify({ code, bedCapacity }),
+    }, 'Room updated.');
+  }
+
+  async function archiveRoom(room: Room) {
+    if (!window.confirm(`Archive room ${room.code}? Archive its beds first.`)) return;
+    await mutate(`/branches/${branchId}/inventory/rooms/${room.id}`, {
+      method: 'DELETE',
+    }, 'Room archived.');
+  }
+
+  async function editBed(bed: (typeof inventoryBeds)[number]) {
+    const code = window.prompt('Bed code', bed.code);
+    if (code === null) return;
+    await mutate(`/branches/${branchId}/inventory/beds/${bed.id}`, {
+      method: 'PATCH',
+      body: JSON.stringify({ code }),
+    }, 'Bed updated.');
+  }
+
+  async function archiveBed(bed: (typeof inventoryBeds)[number]) {
+    if (!window.confirm(`Archive bed ${bed.room.code} / ${bed.code}? Only available beds can be archived.`)) return;
+    await mutate(`/branches/${branchId}/inventory/beds/${bed.id}`, {
+      method: 'DELETE',
+    }, 'Bed archived.');
+  }
+
   async function saveMessMenu(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     const entries = Object.entries(menuEntries)
@@ -861,6 +950,13 @@ export default function Phase2Workspace() {
       method: 'PATCH',
       body: JSON.stringify(changes),
     }, 'Complaint updated.');
+  }
+
+  async function archiveComplaint(complaint: Complaint) {
+    if (!window.confirm('Archive this resolved complaint? Its record will be retained.')) return;
+    await mutate(`/branches/${branchId}/complaints/${complaint.id}`, {
+      method: 'DELETE',
+    }, 'Complaint archived.');
   }
 
   async function assignComplaint(complaint: Complaint) {
@@ -955,6 +1051,13 @@ export default function Phase2Workspace() {
     }, messages[action]);
   }
 
+  async function archiveVisitorVisit(visit: VisitorVisit) {
+    if (!window.confirm('Archive this completed visitor record? It will be retained under the pending retention policy.')) return;
+    await mutate(`/branches/${branchId}/visitors/${visit.id}`, {
+      method: 'DELETE',
+    }, 'Visitor record archived.');
+  }
+
   async function signOut() {
     const response = await apiRequest('/auth/logout', { method: 'POST', body: JSON.stringify({}) });
     if (!response.ok) {
@@ -980,7 +1083,7 @@ export default function Phase2Workspace() {
       <div className="workspace-content">
         {!isOnline && (
           <div className="notice error" role="status">
-            Offline — read-only cached dashboard counts are available in the Offline section. Changes are not saved or queued.
+            Offline — cached dashboard counts are available. Staff changes are blocked; student complaint submissions can queue in the student portal.
           </div>
         )}
         <div className="workspace-title">
@@ -1051,6 +1154,12 @@ export default function Phase2Workspace() {
                               <div className="record-actions">
                                 <button className="button primary small" type="button" disabled={busy} onClick={() => void reviewAdmission(admission, 'APPROVED')}>Approve</button>
                                 <button className="button danger small" type="button" disabled={busy} onClick={() => void reviewAdmission(admission, 'REJECTED')}>Reject</button>
+                              </div>
+                            )}
+                            {admission.status === 'PENDING' && can('admissions', 'edit') && (
+                              <div className="record-actions">
+                                <button className="button secondary small" type="button" disabled={busy} onClick={() => void editAdmission(admission)}>Edit</button>
+                                <button className="button danger small" type="button" disabled={busy} onClick={() => void cancelAdmission(admission)}>Cancel admission</button>
                               </div>
                             )}
                             {admission.status === 'APPROVED' && !allocation && can('allocations', 'assign') && can('allocations', 'view') && (
@@ -1163,10 +1272,55 @@ export default function Phase2Workspace() {
                     </form>
                   </div>
                 )}
+                {(can('inventory', 'edit') || can('inventory', 'delete')) && (
+                  <section className="panel">
+                    <h3>Buildings, floors, and rooms</h3>
+                    {!buildings.length ? <p className="empty-state">No buildings configured.</p> : (
+                      <div className="record-list">
+                        {buildings.map((building) => (
+                          <article className="record" key={building.id}>
+                            <div className="record-main">
+                              <div><h4>{building.name}</h4></div>
+                              <div className="record-actions">
+                                {can('inventory', 'edit') && <button className="button secondary small" type="button" disabled={busy} onClick={() => void editBuilding(building)}>Edit</button>}
+                                {can('inventory', 'delete') && <button className="button danger small" type="button" disabled={busy} onClick={() => void archiveBuilding(building)}>Archive</button>}
+                              </div>
+                            </div>
+                            {building.floors.map((floor) => (
+                              <div className="record" key={floor.id}>
+                                <div className="record-main">
+                                  <div><strong>{floor.name || `Level ${floor.level}`}</strong></div>
+                                  <div className="record-actions">
+                                    {can('inventory', 'edit') && <button className="button secondary small" type="button" disabled={busy} onClick={() => void editFloor(floor)}>Edit floor</button>}
+                                    {can('inventory', 'delete') && <button className="button danger small" type="button" disabled={busy} onClick={() => void archiveFloor(floor)}>Archive floor</button>}
+                                  </div>
+                                </div>
+                                {rooms.filter((room) => room.floor.id === floor.id).map((room) => (
+                                  <div className="record-main" key={room.id}>
+                                    <span>Room {room.code} · capacity {room.bedCapacity}</span>
+                                    <div className="record-actions">
+                                      {can('inventory', 'edit') && <button className="button secondary small" type="button" disabled={busy} onClick={() => void editRoom(room)}>Edit room</button>}
+                                      {can('inventory', 'delete') && <button className="button danger small" type="button" disabled={busy} onClick={() => void archiveRoom(room)}>Archive room</button>}
+                                    </div>
+                                  </div>
+                                ))}
+                              </div>
+                            ))}
+                          </article>
+                        ))}
+                      </div>
+                    )}
+                  </section>
+                )}
                 <h3 className="inventory-list-title">Current beds</h3>
                 {!inventoryBeds.length ? <p className="empty-state">No beds configured.</p> : (
-                  <div className="table-wrap"><table><thead><tr><th>Room</th><th>Bed</th><th>Status</th></tr></thead><tbody>
-                    {inventoryBeds.map((bed) => <tr key={bed.id}><td>{bed.room.code}</td><td>{bed.code}</td><td><span className={`status ${bed.status.toLowerCase()}`}>{bed.status.replace('_', ' ')}</span></td></tr>)}
+                  <div className="table-wrap"><table><thead><tr><th>Room</th><th>Bed</th><th>Status</th>{(can('inventory', 'edit') || can('inventory', 'delete')) && <th>Actions</th>}</tr></thead><tbody>
+                    {inventoryBeds.map((bed) => <tr key={bed.id}><td>{bed.room.code}</td><td>{bed.code}</td><td><span className={`status ${bed.status.toLowerCase()}`}>{bed.status.replace('_', ' ')}</span></td>
+                      {(can('inventory', 'edit') || can('inventory', 'delete')) && <td><div className="record-actions">
+                        {can('inventory', 'edit') && <button className="button secondary small" type="button" disabled={busy} onClick={() => void editBed(bed)}>Edit</button>}
+                        {can('inventory', 'delete') && <button className="button danger small" type="button" disabled={busy || bed.status !== 'AVAILABLE'} onClick={() => void archiveBed(bed)}>Archive</button>}
+                      </div></td>}
+                    </tr>)}
                   </tbody></table></div>
                 )}
               </section>
@@ -1482,6 +1636,9 @@ export default function Phase2Workspace() {
                               </label>
                             </div>
                           )}
+                          {can('complaints', 'delete') && (complaint.status === 'RESOLVED' || complaint.status === 'CLOSED') && (
+                            <button className="button danger small" type="button" disabled={busy} onClick={() => void archiveComplaint(complaint)}>Archive</button>
+                          )}
                         </article>
                       ))}
                     </div>
@@ -1627,6 +1784,9 @@ export default function Phase2Workspace() {
                             {visit.status === 'CHECKED_IN' && can('visitors', 'edit') && (
                               <button className="button secondary small" type="button" disabled={busy} onClick={() => void transitionVisitorVisit(visit, 'check-out')}>Check out</button>
                             )}
+                            {(visit.status === 'REJECTED' || visit.status === 'CHECKED_OUT') && can('visitors', 'delete') && (
+                              <button className="button danger small" type="button" disabled={busy} onClick={() => void archiveVisitorVisit(visit)}>Archive</button>
+                            )}
                           </div>
                         </article>
                       ))}
@@ -1640,7 +1800,7 @@ export default function Phase2Workspace() {
               <div className="content-grid">
                 <section className="panel">
                   <h2>Offline sync & backup verification</h2>
-                  <p>Only aggregate branch dashboard counts are cached in this browser tab session storage. Personal details, financial amounts, and visitor contact data are not cached.</p>
+                  <p>Only aggregate branch dashboard counts are cached in this browser tab session storage. Student complaint submissions can be queued in the student portal; staff operational changes are not queued. Personal details, financial amounts, and visitor contact data are not cached.</p>
                   {offlineDashboard && (
                     <>
                       <div className="panel-heading">
@@ -1670,6 +1830,7 @@ export default function Phase2Workspace() {
                       <ul>
                         <li>Cache active: {offlineStatus.cacheEnabled ? 'Yes' : 'No'}</li>
                         <li>Cached data: {offlineStatus.allowedData.join(', ')}</li>
+                        <li>Queueable actions: {offlineStatus.queueableActions.join(', ') || 'none'}</li>
                         <li>Blocked actions: {offlineStatus.blockedActions.join(', ')}</li>
                         <li>Last verified: {new Date(offlineStatus.lastCheckedAt).toLocaleString()}</li>
                       </ul>

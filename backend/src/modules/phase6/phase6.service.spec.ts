@@ -50,6 +50,7 @@ describe('Phase6Service', () => {
         readOnly: true,
         cacheEnabled: true,
         syncRequired: true,
+        queueableActions: ['student-complaint-submission'],
       }),
     );
 

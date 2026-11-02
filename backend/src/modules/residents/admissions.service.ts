@@ -8,7 +8,11 @@ import { AdmissionStatus, Resident } from '@prisma/client';
 import { AuditService } from '../audit/audit.service';
 import { PrismaService } from '../../common/prisma/prisma.service';
 import { hasPrismaErrorCode } from '../../common/utils/prisma-error.util';
-import { AdmissionDecisionDto, CreateAdmissionDto } from './residents.dto';
+import {
+  AdmissionDecisionDto,
+  CreateAdmissionDto,
+  UpdateAdmissionDto,
+} from './residents.dto';
 import { ResidentsService } from './residents.service';
 
 @Injectable()
@@ -145,6 +149,98 @@ export class AdmissionsService {
       branchId,
       actorUserId,
       action: `admission.${dto.decision.toLowerCase()}`,
+      module: 'admissions',
+      entityType: 'admission',
+      entityId: admissionId,
+      outcome: 'success',
+    });
+    return this.get(tenantId, branchId, admissionId);
+  }
+
+  async update(
+    tenantId: string,
+    branchId: string,
+    actorUserId: string,
+    admissionId: string,
+    dto: UpdateAdmissionDto,
+  ) {
+    await this.residents.ensureBranch(tenantId, branchId);
+    if (dto.requestedCheckInAt === undefined && dto.notes === undefined) {
+      throw new BadRequestException('At least one admission field must be provided');
+    }
+
+    const result = await this.prisma.admission.updateMany({
+      where: {
+        id: admissionId,
+        tenantId,
+        branchId,
+        status: 'PENDING',
+        deletedAt: null,
+      },
+      data: {
+        ...(dto.requestedCheckInAt !== undefined
+          ? { requestedCheckInAt: dto.requestedCheckInAt ? new Date(dto.requestedCheckInAt) : null }
+          : {}),
+        ...(dto.notes !== undefined ? { notes: dto.notes?.trim() || null } : {}),
+      },
+    });
+    if (result.count !== 1) {
+      const current = await this.prisma.admission.findFirst({
+        where: { id: admissionId, tenantId, branchId, deletedAt: null },
+        select: { id: true },
+      });
+      if (!current) throw new NotFoundException('Admission not found');
+      throw new ConflictException('Only pending admissions can be edited');
+    }
+
+    await this.audit.log({
+      tenantId,
+      branchId,
+      actorUserId,
+      action: 'admission.update',
+      module: 'admissions',
+      entityType: 'admission',
+      entityId: admissionId,
+      outcome: 'success',
+    });
+    return this.get(tenantId, branchId, admissionId);
+  }
+
+  async cancel(
+    tenantId: string,
+    branchId: string,
+    actorUserId: string,
+    admissionId: string,
+  ) {
+    await this.residents.ensureBranch(tenantId, branchId);
+    const result = await this.prisma.admission.updateMany({
+      where: {
+        id: admissionId,
+        tenantId,
+        branchId,
+        status: 'PENDING',
+        deletedAt: null,
+      },
+      data: {
+        status: 'CANCELLED',
+        decidedByUserId: actorUserId,
+        decidedAt: new Date(),
+      },
+    });
+    if (result.count !== 1) {
+      const current = await this.prisma.admission.findFirst({
+        where: { id: admissionId, tenantId, branchId, deletedAt: null },
+        select: { id: true },
+      });
+      if (!current) throw new NotFoundException('Admission not found');
+      throw new ConflictException('Only pending admissions can be cancelled');
+    }
+
+    await this.audit.log({
+      tenantId,
+      branchId,
+      actorUserId,
+      action: 'admission.cancel',
       module: 'admissions',
       entityType: 'admission',
       entityId: admissionId,

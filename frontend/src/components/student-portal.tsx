@@ -4,6 +4,14 @@ import { FormEvent, useCallback, useEffect, useMemo, useRef, useState } from 're
 import { useRouter } from 'next/navigation';
 import { apiDownload, apiRequest, apiUpload, setAccessToken } from '@/lib/api/client';
 import { getFinanceSubmissionKey } from '@/lib/finance/submission';
+import {
+  addQueuedComplaint,
+  complaintOutboxKey,
+  markQueuedComplaintFailed,
+  readComplaintOutbox,
+  removeQueuedComplaint,
+  type QueuedComplaint,
+} from '@/lib/offline/complaint-outbox';
 
 type Branch = { id: string; name: string; code: string };
 type Profile = { id: string; email: string | null; roles: string[]; permissions: string[] };
@@ -92,6 +100,22 @@ function currentMonday() {
   return new Date(date.getTime() - offset).toISOString().slice(0, 10);
 }
 
+function createMutationId() {
+  const bytes = globalThis.crypto.getRandomValues(new Uint8Array(16));
+  bytes[6] = (bytes[6] & 0x0f) | 0x40;
+  bytes[8] = (bytes[8] & 0x3f) | 0x80;
+  const hex = Array.from(bytes, (byte) => byte.toString(16).padStart(2, '0')).join('');
+  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
+}
+
+function complaintSessionStorage(): Storage | null {
+  try {
+    return window.sessionStorage;
+  } catch {
+    return null;
+  }
+}
+
 export default function StudentPortal() {
   const router = useRouter();
   const [profile, setProfile] = useState<Profile | null>(null);
@@ -100,6 +124,8 @@ export default function StudentPortal() {
   const [resident, setResident] = useState<Resident | null>(null);
   const [menu, setMenu] = useState<MenuEntry[]>([]);
   const [complaints, setComplaints] = useState<Complaint[]>([]);
+  const [queuedComplaints, setQueuedComplaints] = useState<QueuedComplaint[]>([]);
+  const [isOnline, setIsOnline] = useState(true);
   const [notices, setNotices] = useState<Notice[]>([]);
   const [invoices, setInvoices] = useState<StudentInvoice[]>([]);
   const [activeTab, setActiveTab] = useState<StudentTab>('dashboard');
@@ -198,6 +224,84 @@ export default function StudentPortal() {
   }, []);
 
   useEffect(() => {
+    const updateConnectivity = () => setIsOnline(navigator.onLine);
+    updateConnectivity();
+    window.addEventListener('online', updateConnectivity);
+    window.addEventListener('offline', updateConnectivity);
+    return () => {
+      window.removeEventListener('online', updateConnectivity);
+      window.removeEventListener('offline', updateConnectivity);
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!profile || !branchId) return;
+    const key = complaintOutboxKey(profile.id, branchId);
+    const storage = complaintSessionStorage();
+    if (!storage) {
+      setError('Browser session storage is unavailable; queued complaints cannot be read or synced.');
+      return;
+    }
+    const stored = readComplaintOutbox(storage, key);
+    setQueuedComplaints(stored.items);
+    if (stored.error) {
+      setError(stored.error);
+      return;
+    }
+    if (!isOnline || !stored.items.length) return;
+
+    let active = true;
+    void (async () => {
+      let remaining = stored.items;
+      let synced = 0;
+      for (const complaint of stored.items) {
+        const response = await apiRequest<Complaint>(`/branches/${branchId}/complaints`, {
+          method: 'POST',
+          body: JSON.stringify({
+            title: complaint.title,
+            description: complaint.description,
+            priority: complaint.priority,
+            clientMutationId: complaint.clientMutationId,
+          }),
+        });
+        if (response.ok) {
+          const result = removeQueuedComplaint(storage, key, complaint.clientMutationId);
+          remaining = result.items;
+          if (result.error) {
+            if (active) setError(result.error);
+            break;
+          }
+          synced += 1;
+          continue;
+        }
+        if (response.status === 401) {
+          router.replace('/login');
+          break;
+        }
+        if (response.status === 0 || response.status >= 500) break;
+        const result = markQueuedComplaintFailed(
+          storage,
+          key,
+          complaint.clientMutationId,
+          response.message,
+        );
+        remaining = result.items;
+        if (result.error) {
+          if (active) setError(result.error);
+          break;
+        }
+      }
+      if (!active) return;
+      setQueuedComplaints(remaining);
+      if (synced) {
+        setMessage(`${synced} queued complaint${synced === 1 ? '' : 's'} synced.`);
+        await loadBranch();
+      }
+    })();
+    return () => { active = false; };
+  }, [branchId, isOnline, loadBranch, profile, router]);
+
+  useEffect(() => {
     void loadBranch();
   }, [loadBranch]);
 
@@ -248,18 +352,76 @@ export default function StudentPortal() {
 
   async function submitComplaint(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    if (!branchId) return;
+    if (!branchId || !profile) return;
     setSubmitting(true);
     setError('');
     setMessage('');
+    let clientMutationId: string;
+    try {
+      clientMutationId = createMutationId();
+    } catch {
+      setSubmitting(false);
+      setError('Secure random IDs are unavailable; the complaint was not sent or queued.');
+      return;
+    }
+    const queuedComplaint: QueuedComplaint = {
+      clientMutationId,
+      title: title.trim(),
+      description: description.trim(),
+      priority: 'NORMAL',
+      queuedAt: new Date().toISOString(),
+    };
+    if (!isOnline) {
+      const key = complaintOutboxKey(profile?.id ?? '', branchId);
+      const storage = complaintSessionStorage();
+      if (!storage) {
+        setSubmitting(false);
+        setError('Browser session storage is unavailable; the complaint was not queued.');
+        return;
+      }
+      const result = addQueuedComplaint(storage, key, queuedComplaint);
+      setSubmitting(false);
+      setQueuedComplaints(result.items);
+      if (result.error) {
+        setError(result.error);
+        return;
+      }
+      setTitle('');
+      setDescription('');
+      setMessage('Complaint queued in this browser session; it will sync when you reconnect.');
+      return;
+    }
     const response = await apiRequest<Complaint>(`/branches/${branchId}/complaints`, {
       method: 'POST',
-      body: JSON.stringify({ title: title.trim(), description: description.trim(), priority: 'NORMAL' }),
+      body: JSON.stringify({
+        title: queuedComplaint.title,
+        description: queuedComplaint.description,
+        priority: queuedComplaint.priority,
+        clientMutationId,
+      }),
     });
     setSubmitting(false);
     if (!response.ok) {
       if (response.status === 401) {
         router.replace('/login');
+        return;
+      }
+      if (response.status === 0 || response.status >= 500) {
+        const key = complaintOutboxKey(profile?.id ?? '', branchId);
+        const storage = complaintSessionStorage();
+        if (!storage) {
+          setError(`${response.message} Browser session storage is unavailable; the complaint was not queued.`);
+          return;
+        }
+        const result = addQueuedComplaint(storage, key, queuedComplaint);
+        setQueuedComplaints(result.items);
+        if (result.error) {
+          setError(`${response.message} The complaint could not be queued: ${result.error}`);
+          return;
+        }
+        setTitle('');
+        setDescription('');
+        setMessage('Connection failed; complaint queued in this browser session for retry.');
         return;
       }
       setError(response.message);
@@ -269,6 +431,22 @@ export default function StudentPortal() {
     setDescription('');
     setMessage('Your complaint has been submitted.');
     await loadBranch();
+  }
+
+  function discardQueuedComplaint(clientMutationId: string) {
+    if (!profile || !branchId) return;
+    const storage = complaintSessionStorage();
+    if (!storage) {
+      setError('Browser session storage is unavailable; the queued complaint was not removed.');
+      return;
+    }
+    const result = removeQueuedComplaint(
+      storage,
+      complaintOutboxKey(profile.id, branchId),
+      clientMutationId,
+    );
+    setQueuedComplaints(result.items);
+    if (result.error) setError(result.error);
   }
 
   async function submitPayment(event: FormEvent<HTMLFormElement>, invoice: StudentInvoice) {
@@ -605,12 +783,42 @@ export default function StudentPortal() {
               )}
               {activeTab === 'complaints' && (
                 <>
+                  {queuedComplaints.length > 0 && (
+                    <section className="panel" aria-live="polite">
+                      <div className="panel-heading">
+                        <div>
+                          <h2>Queued complaints</h2>
+                          <p>Stored only for this browser session; synced when you reconnect. Review any error before retrying.</p>
+                        </div>
+                        <span className="count-pill">{queuedComplaints.length}</span>
+                      </div>
+                      <div className="record-list">
+                        {queuedComplaints.map((queued) => (
+                          <article className="record" key={queued.clientMutationId}>
+                            <div className="record-main">
+                              <div>
+                                <h3>{queued.title}</h3>
+                                <p>{queued.syncError || (isOnline ? 'Waiting to sync.' : 'Waiting for a connection.')}</p>
+                              </div>
+                              <button
+                                className="button secondary small"
+                                type="button"
+                                onClick={() => discardQueuedComplaint(queued.clientMutationId)}
+                              >
+                                Discard
+                              </button>
+                            </div>
+                          </article>
+                        ))}
+                      </div>
+                    </section>
+                  )}
                   <section className="panel">
                     <h2>Submit a complaint</h2>
-                    <p>Only you and authorized hostel staff can view your complaint.</p>
+                    <p>Only you and authorized hostel staff can view your complaint. Offline submissions are queued in this browser session.</p>
                     <form className="stack-form" onSubmit={submitComplaint}>
                       <label>Subject<input required maxLength={150} value={title} onChange={(event) => setTitle(event.target.value)} /></label>
-                      <label>Details<textarea required maxLength={5000} rows={5} value={description} onChange={(event) => setDescription(event.target.value)} /></label>
+                      <label>Details<textarea required maxLength={4000} rows={5} value={description} onChange={(event) => setDescription(event.target.value)} /></label>
                       <button className="button primary" disabled={submitting}>{submitting ? 'Submitting…' : 'Submit complaint'}</button>
                     </form>
                   </section>

@@ -1,6 +1,7 @@
 import {
   Body,
   Controller,
+  Delete,
   Get,
   Param,
   ParseUUIDPipe,
@@ -106,6 +107,21 @@ export class Phase4Controller {
       user.userId,
       complaintId,
       dto,
+    );
+  }
+
+  @Delete('complaints/:complaintId')
+  @RequirePermission('complaints', 'delete')
+  archiveComplaint(
+    @Param('branchId', ParseUUIDPipe) branchId: string,
+    @Param('complaintId', ParseUUIDPipe) complaintId: string,
+    @CurrentUser() user: RequestUser,
+  ) {
+    return this.phase4.archiveComplaint(
+      user.tenantId,
+      branchId,
+      user.userId,
+      complaintId,
     );
   }
 

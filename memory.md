@@ -1,8 +1,12 @@
 # memory.md — HMS Session Handoff
 
-**Last updated:** 2026-10-27 (deferred platform-admin MFA enrollment)
+**Last updated:** 2026-11-02 (local CRUD/offline follow-up)
 
-## Current handoff — 2026-10-27
+## Current handoff — 2026-11-02
+
+The local-only follow-up implements pending-only admission edits/cancellation, inventory updates and dependency-checked soft archives, complaint/visitor soft archives, and an idempotent student-complaint offline queue. Inventory parent locks serialize child creation/edit/archive checks. Biometrics remain excluded; visitor hours and record-retention/backup policies remain deferred. A fresh disposable PostgreSQL `hms_test` database applied all migrations and passed 15/15 integration tests; the synthetic PostgreSQL restore smoke passed. The additive migration `20261102000000_phase6_offline_complaint_archive` remains unapplied to any persistent HMS database. Backend 20 suites / 154 tests and frontend 6 suites / 23 tests pass; both typechecks, linters, Prisma validation, and production builds pass. A fresh source-only `HMS_Phase1.zip` is at the workspace root, excluding environment secrets, dependencies, and generated output. See `gap.md` for current blockers. Historical entries below describe prior state and may be superseded by this handoff.
+
+## Historical handoff — 2026-10-27
 The seven-task execution is documented in `progress.md` and `gap.md`. The platform-admin login 404 is resolved. Tenant RLS behavior and authorized management APIs are verified with live PostgreSQL checks and disposable PostgreSQL HTTP tests. Latest code now permits MFA enrollment to be deferred at bootstrap but mandates enrollment on first password login before issuing an access token.
 
 - Backend final validation: 19 suites / 124 unit tests passed; focused platform-admin PostgreSQL integration tests: 4 passed; typecheck, lint, and production image build passed.

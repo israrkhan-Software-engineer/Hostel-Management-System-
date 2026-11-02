@@ -8,11 +8,13 @@ Multi-tenant SaaS platform for hostel operations — residents, billing, gate, m
 **Phase 3 — Finance (complete for the user-confirmed scope):** manual invoices, payment verification, balances/credits, refunds, finance reporting, and PDF downloads of issued invoices.
 **Phase 4 — Mess, Complaints, and Notices (complete for the confirmed starter scope):** weekly menus, complaint tracking, and branch-wide notices.
 **Phase 5 — Gate Operations:** visitor registration, staff approval, gate check-in/out, and visit history. New registrations require Pakistani CNIC; CNIC is encrypted at rest and returned/searchable only in masked/fingerprint form. Existing records remain readable without a CNIC.
-**Phase 6 — Offline sync & backup verification (partially complete):** aggregate dashboard counts are cached in the active browser session in read-only mode; personal details and financial amounts are excluded. A synthetic PostgreSQL restore smoke exists, but application backup/restore is not verified.
+**Phase 6 — Offline sync & backup verification (partially complete):** aggregate dashboard counts are cached in the active browser session. Student complaint submissions can queue in session storage and replay online with an idempotency key; staff operations remain blocked offline. Personal details and financial amounts are not included in the dashboard cache. A synthetic PostgreSQL restore smoke exists, but application backup/restore is not verified.
 **Phase 7 — Hardening readiness (complete for the agreed local scope):** global API throttling, CI checks, offline browser verification, local 100-rps benchmark, and isolated synthetic PostgreSQL restore smoke test are complete. Production-like certification and an application-data restore remain unverified; no production deployment or owner-policy changes.
 **Phase 8 — Pilot (not started):** production-like rollout and operational acceptance remain separate from local hardening.
 
-Phase 2 uses staff-created admissions that require approval before a bed can be assigned. CNIC values are encrypted at rest and only returned masked.
+Phase 2 uses staff-created admissions that require approval before a bed can be assigned. Pending admissions may be edited or cancelled; later states cannot. Inventory records can be edited and soft-archived only when their dependencies are clear (and beds must be available). CNIC values are encrypted at rest and only returned masked.
+
+Current local verification (2026-11-02): backend 20 suites / 154 tests and frontend 6 suites / 23 tests pass; both typechecks, linters, Prisma schema validation, and production builds pass. All migrations applied successfully to a fresh disposable `hms_test` database; both PostgreSQL integration suites passed (15/15 tests), and the isolated synthetic database restore smoke passed. The new complaint-idempotency/archive migration remains unapplied to any persistent HMS database. No live/production database, authenticated browser account, hosted CI, or production environment was accessed. The source-only project archive is `../HMS_Phase1.zip`; it excludes environment secrets, dependencies, and generated build output.
 
 ---
 
@@ -105,9 +107,12 @@ See `gap.md` for the full open-decision register.
 
 Authenticated endpoints are branch-scoped under `/api/v1/branches/:branchId`:
 
-- `GET/POST inventory/buildings`, `POST inventory/floors`, `GET/POST inventory/rooms`, `GET/POST inventory/beds`
+- `GET/POST inventory/buildings`, `PATCH/DELETE inventory/buildings/:buildingId`
+- `POST inventory/floors`, `PATCH/DELETE inventory/floors/:floorId`
+- `GET/POST inventory/rooms`, `PATCH/DELETE inventory/rooms/:roomId`
+- `GET/POST inventory/beds`, `PATCH/DELETE inventory/beds/:bedId`
 - `GET/POST residents`, `GET/PATCH/DELETE residents/:residentId`
-- `GET/POST admissions`, `PATCH admissions/:admissionId/decision`
+- `GET/POST admissions`, `PATCH admissions/:admissionId`, `POST admissions/:admissionId/cancel`, `PATCH admissions/:admissionId/decision`
 - `GET admissions/available-beds`, `POST admissions/:admissionId/allocation`
 - `POST admissions/:admissionId/check-in` and `POST admissions/:admissionId/check-out`
 - `GET /api/v1/branches` returns only active branches the signed-in staff member can access
@@ -118,7 +123,7 @@ The staff workspace at `/login`, `/reception`, `/warden`, and `/owner` supports 
 
 Bed assignment is conditional and transactional; room bed capacity and active bed uniqueness are enforced. The local Docker Compose stack was verified running and accessible through nginx at `http://localhost:8080`; PostgreSQL, Redis, API, and frontend readiness checks pass, and the worker remains running.
 
-Validation: backend build and all 59 unit tests pass; frontend type-check and all 7 API-client tests pass. The API Docker image builds with the seed command included, and the local seed command creates both demo tenants. The authenticated API workflow was exercised end to end: login/profile/branch visibility, resident creation with masked CNIC, admission approval, bed allocation, check-in, check-out, and bed release. The local Compose stack remains healthy and accessible through nginx.
+Historical Phase 2 validation: the API Docker image and local seed command were verified, and the authenticated API lifecycle was exercised end to end. These older test counts and live-stack checks are not the current local-only verification summarized above.
 
 ## Phase 3 (complete for the user-confirmed scope)
 
@@ -151,12 +156,12 @@ The user-confirmed starter scope is:
 Phase 4 API routes are under `/api/v1/branches/:branchId`:
 
 - `GET/PUT mess-menus` (optionally filter by `weekStart=YYYY-MM-DD`)
-- `GET/POST complaints`, `GET complaints/queue`, `POST complaints/:complaintId/assign-to-me`, `PATCH complaints/:complaintId`
+- `GET/POST complaints`, `GET complaints/queue`, `POST complaints/:complaintId/assign-to-me`, `PATCH complaints/:complaintId`, `DELETE complaints/:complaintId`
 - `GET notices`, `GET notices/manage`, `POST notices`, `PATCH notices/:noticeId`
 
-All phase data is tenant- and branch-scoped, uses permission gates, and has tenant RLS policies. The API, additive migration, seed permissions, and shared staff/resident workspace are implemented.
+All phase data is tenant- and branch-scoped, uses permission gates, and has tenant RLS policies. Offline complaint submissions include a client mutation ID so a retry after an interrupted response cannot create a duplicate. Resolved or closed complaints may be soft-archived; archived records are hidden from normal lists but retained, with no physical purge while retention is undecided. The API, additive migration, seed permissions, and shared staff/resident workspace are implemented.
 
-Verification: the migration is applied and Prisma reports the database up to date; all 74 backend tests and 7 frontend tests pass; frontend typecheck and API/frontend Docker builds pass. Live checks exercised weekly menu save/view, notice draft/publish and resident visibility, complaint assignment and status through closure, submitter-only complaint visibility, and denial of resident access to the staff complaint queue. The Phase 4 tabs were inspected in the running workspace.
+Historical Phase 4 verification: the original migration and live role workflows were tested at the time. The new additive migration described in the current local verification remains unapplied.
 
 ## Phase 5 (complete for the user-confirmed manual visitor scope)
 
@@ -167,8 +172,9 @@ Phase 5 API routes are under `/api/v1/branches/:branchId`:
 - `GET/POST visitors` (`GET` accepts a `q` search on visitor name, phone, or CNIC fingerprint)
 - `POST visitors/:visitId/approve`, `POST visitors/:visitId/reject`
 - `POST visitors/:visitId/check-in`, `POST visitors/:visitId/check-out`
+- `DELETE visitors/:visitId` soft-archives rejected or checked-out visits; it does not erase visitor identity data
 
-The status sequence is PENDING → APPROVED → CHECKED_IN → CHECKED_OUT, with PENDING → REJECTED as the alternative. Invalid, repeated, or out-of-order transitions are rejected. Biometrics (G-08), visitor charges, visiting hours, and record-retention policy are excluded pending owner decisions (G-21). No automatic visitor-record purge is configured while retention is undecided.
+The status sequence is PENDING → APPROVED → CHECKED_IN → CHECKED_OUT, with PENDING → REJECTED as the alternative. Invalid, repeated, or out-of-order transitions are rejected. Biometrics (G-08) are not approved; visitor hours and record-retention policy (G-21) are deferred by the user. No automatic visitor-record purge is configured while retention is undecided.
 
 Verification: The original Phase 5 workflow was verified with Security and Warden permissions, tenant/branch-scoped visitor list access, and Resident denial (HTTP 403). The later CNIC extension adds encrypted storage, fingerprint search, and masked responses through an additive migration; see the current session validation results before claiming a live workflow test.
 
@@ -188,9 +194,9 @@ To link a student login, hostel staff must first create an active user with the 
 
 Student profile-edit validation: all 12 resident service tests and both student portal component tests pass; backend/frontend typechecks and lint pass. The deployed API and frontend are healthy.
 
-## Phase 6 (incomplete — implementation gaps)
+## Phase 6 (partially implemented)
 
-The offline experience caches only aggregate branch counts (active residents, occupied/available beds, pending admissions, open complaints, and pending visitor count) in session storage partitioned by user and branch. It does not cache personal details, visitor contact details, or financial amounts. Cached data remains read-only; writes are blocked and never queued. Cache is available only within the authenticated browser session and current tab.
+The dashboard cache contains only aggregate branch counts (active residents, occupied/available beds, pending admissions, open complaints, and pending visitor count) in session storage partitioned by user and branch; it excludes resident details, visitor contact details, and financial amounts. Separately, the student portal can queue complaint submissions in session storage and sync them online using a server-verified idempotency key. Failed submissions remain visible with an error and can be discarded. All other staff operations are blocked offline. The queue is tab-session scoped, not cross-device or an offline copy of the full application.
 
 The backup endpoint performs a non-destructive API-runtime configuration preflight. It does not create a backup or restore one. A separate Phase 7 smoke test round-trips synthetic PostgreSQL data in a disposable container; it does not validate HMS application backups, SeaweedFS recovery, or the RPO/RTO targets. Automated retention cleanup remains deferred until an owner-approved policy is provided.
 
