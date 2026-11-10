@@ -3,6 +3,7 @@
 import { FormEvent, useCallback, useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { apiRequest, getAccessToken, setAccessToken } from '@/lib/api/client';
+import SaasManagementPanel from './saas-management-panel';
 
 type TenantStatus = 'PROVISIONING' | 'ACTIVE' | 'SUSPENDED' | 'OFFBOARDING' | 'CLOSED';
 type Tenant = {
@@ -45,7 +46,7 @@ type AuditEntry = {
   platformAdmin: { email: string };
 };
 type Paginated<T> = { items: T[]; page: number; pageSize: number; total: number; pageCount: number };
-type Section = 'overview' | 'tenants' | 'audit';
+type Section = 'overview' | 'tenants' | 'saas' | 'audit';
 type TenantForm = {
   name: string;
   slug: string;
@@ -94,6 +95,7 @@ export default function PlatformAdminWorkspace() {
   const [audit, setAudit] = useState<Paginated<AuditEntry> | null>(null);
   const [tenantPage, setTenantPage] = useState(1);
   const [auditPage, setAuditPage] = useState(1);
+  const [saasRefresh, setSaasRefresh] = useState(0);
   const [tenantSearch, setTenantSearch] = useState('');
   const [appliedTenantSearch, setAppliedTenantSearch] = useState('');
   const [tenantStatusFilter, setTenantStatusFilter] = useState('');
@@ -379,6 +381,7 @@ export default function PlatformAdminWorkspace() {
           {([
             ['overview', 'Overview'],
             ['tenants', 'Organizations'],
+            ['saas', 'SaaS & billing'],
             ['audit', 'Audit log'],
           ] as const).map(([key, label]) => (
             <button
@@ -400,13 +403,14 @@ export default function PlatformAdminWorkspace() {
           <div className="platform-title-row">
             <div>
               <span className="eyebrow">PLATFORM ADMINISTRATION</span>
-              <h1>{section === 'overview' ? 'Overview' : section === 'tenants' ? 'Organizations' : 'Audit log'}</h1>
-              <p>Manage organizations and their access across the HMS platform.</p>
+              <h1>{section === 'overview' ? 'Overview' : section === 'tenants' ? 'Organizations' : section === 'saas' ? 'SaaS & billing' : 'Audit log'}</h1>
+              <p>Manage organizations, subscriptions, platform billing, and access.</p>
             </div>
             <button type="button" className="button secondary" onClick={() => {
               clearNotices();
               if (section === 'overview') void loadOverview();
               if (section === 'tenants') void loadTenants();
+              if (section === 'saas') setSaasRefresh((value) => value + 1);
               if (section === 'audit') void loadAudit();
             }}>
               Refresh data
@@ -610,6 +614,7 @@ export default function PlatformAdminWorkspace() {
                             No owner account is associated with this organization. Owner changes and password resets are unavailable.
                           </p>
                         )}
+
                         <label>Hostel location / address
                           <textarea maxLength={500} value={editTenantForm.locationAddress}
                             onChange={(event) =>
@@ -723,6 +728,8 @@ export default function PlatformAdminWorkspace() {
               )}
             </>
           )}
+
+          {section === 'saas' && <SaasManagementPanel refreshKey={saasRefresh} />}
 
           {section === 'audit' && (
             <section className="panel platform-panel">

@@ -1,9 +1,17 @@
 'use client';
 
 import { FormEvent, useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { apiDownload, apiRequest, apiUpload, setAccessToken } from '@/lib/api/client';
+import { useOnlineStatus } from '@/lib/hooks/use-online-status';
+import { formatStudentMoney as formatMoney } from '@/lib/portal/format';
+import type { StudentInvoice, StudentPayment } from '@/lib/portal/types';
 import { getFinanceSubmissionKey } from '@/lib/finance/submission';
+import AccountSecurityPanel from './account-security-panel';
+import HostelServicesPanel from './hostel-services-panel';
+import NotificationCenter from './notification-center';
+import StudentFeesPanel from './student-fees-panel';
 import {
   addQueuedComplaint,
   complaintOutboxKey,
@@ -14,7 +22,13 @@ import {
 } from '@/lib/offline/complaint-outbox';
 
 type Branch = { id: string; name: string; code: string };
-type Profile = { id: string; email: string | null; roles: string[]; permissions: string[] };
+type Profile = {
+  id: string;
+  email: string | null;
+  roles: string[];
+  permissions: string[];
+  mfaEnabled: boolean;
+};
 type Resident = {
   firstName: string;
   lastName: string;
@@ -45,33 +59,7 @@ type Complaint = {
   createdAt: string;
 };
 type Notice = { id: string; title: string; body: string; startsAt: string | null; endsAt: string | null };
-type StudentPayment = {
-  id: string;
-  amountMinor: number;
-  method: string;
-  status: 'PENDING' | 'VERIFIED' | 'REJECTED';
-  reference: string | null;
-  proofNotes: string | null;
-  rejectionReason: string | null;
-  createdAt: string;
-  proofFileName: string | null;
-  proofAvailable: boolean;
-};
-type StudentInvoice = {
-  id: string;
-  invoiceNumber: string;
-  currency: string;
-  status: string;
-  issuedAt: string;
-  dueAt: string | null;
-  lines: Array<{ id: string; description: string; lineAmountMinor: number }>;
-  payments: StudentPayment[];
-  invoiceTotalMinor: number;
-  verifiedPaymentsMinor: number;
-  refundedMinor: number;
-  balanceDueMinor: number;
-};
-type StudentTab = 'dashboard' | 'profile' | 'room' | 'fees' | 'complaints' | 'notifications';
+type StudentTab = 'dashboard' | 'profile' | 'room' | 'fees' | 'complaints' | 'notifications' | 'services';
 
 const dayNames = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'];
 const meals = ['BREAKFAST', 'LUNCH', 'DINNER'] as const;
@@ -82,15 +70,8 @@ const studentTabs: Array<{ id: StudentTab; label: string }> = [
   { id: 'fees', label: 'Fees & Payments' },
   { id: 'complaints', label: 'Complaints' },
   { id: 'notifications', label: 'Notifications' },
+  { id: 'services', label: 'Student services' },
 ];
-
-function formatMoney(amountMinor: number, currency: string) {
-  return new Intl.NumberFormat('en-PK', { style: 'currency', currency }).format(amountMinor / 100);
-}
-
-function studentPaymentStatus(status: StudentPayment['status']) {
-  return status === 'VERIFIED' ? 'APPROVED' : status;
-}
 
 function currentMonday() {
   const date = new Date();
@@ -125,7 +106,7 @@ export default function StudentPortal() {
   const [menu, setMenu] = useState<MenuEntry[]>([]);
   const [complaints, setComplaints] = useState<Complaint[]>([]);
   const [queuedComplaints, setQueuedComplaints] = useState<QueuedComplaint[]>([]);
-  const [isOnline, setIsOnline] = useState(true);
+  const isOnline = useOnlineStatus();
   const [notices, setNotices] = useState<Notice[]>([]);
   const [invoices, setInvoices] = useState<StudentInvoice[]>([]);
   const [activeTab, setActiveTab] = useState<StudentTab>('dashboard');
@@ -221,17 +202,6 @@ export default function StudentPortal() {
 
   useEffect(() => () => {
     loadRequestId.current += 1;
-  }, []);
-
-  useEffect(() => {
-    const updateConnectivity = () => setIsOnline(navigator.onLine);
-    updateConnectivity();
-    window.addEventListener('online', updateConnectivity);
-    window.addEventListener('offline', updateConnectivity);
-    return () => {
-      window.removeEventListener('online', updateConnectivity);
-      window.removeEventListener('offline', updateConnectivity);
-    };
   }, []);
 
   useEffect(() => {
@@ -572,7 +542,7 @@ export default function StudentPortal() {
   return (
     <>
       <header className="workspace-header">
-        <a className="brand" href="/">HMS <span>Student Portal</span></a>
+        <Link className="brand" href="/">HMS <span>Student Portal</span></Link>
         <div className="button-row">
           {branches.length > 1 && (
             <label>
@@ -585,6 +555,7 @@ export default function StudentPortal() {
               </select>
             </label>
           )}
+          <NotificationCenter />
           <button className="button secondary small" type="button" onClick={() => void signOut()}>Sign out</button>
         </div>
       </header>
@@ -597,6 +568,12 @@ export default function StudentPortal() {
           </div>
           {branches.length === 1 && <span className="count-pill">{branches[0].name}</span>}
         </div>
+        {profile && (
+          <AccountSecurityPanel
+            mfaEnabled={profile.mfaEnabled}
+            onMfaEnabled={() => setProfile((current) => current ? { ...current, mfaEnabled: true } : current)}
+          />
+        )}
         {error && <p className="form-error" role="alert">{error}</p>}
         {message && <p className="success-message" role="status">{message}</p>}
         {branches.length === 0 && !loading && <section className="panel"><h2>No hostel branch assigned</h2><p>Please contact your hostel administration to finish setting up your student account.</p></section>}
@@ -618,6 +595,15 @@ export default function StudentPortal() {
               ))}
             </nav>
             <div className="content-grid student-content-grid">
+              {activeTab === 'services' && (
+                <div className="student-section">
+                  <HostelServicesPanel
+                    mode="student"
+                    branchId={branchId}
+                    permissions={profile?.permissions ?? []}
+                  />
+                </div>
+              )}
               {activeTab === 'dashboard' && (
                 <>
                   <section className="student-metrics">
@@ -719,67 +705,14 @@ export default function StudentPortal() {
                 </section>
               )}
               {activeTab === 'fees' && (
-                <section className="panel student-section">
-                  <div className="panel-heading"><div><h2>Fees & Payments</h2><p>Monthly rent, outstanding dues, and payment history.</p></div><strong>Outstanding: {formatMoney(outstandingMinor, invoices[0]?.currency ?? 'PKR')}</strong></div>
-                  {!invoices.length ? <p className="empty-state">No invoices have been issued to your account.</p> : (
-                    <div className="record-list">
-                      {invoices.map((invoice) => {
-                        const pendingMinor = invoice.payments
-                          .filter((payment) => payment.status === 'PENDING')
-                          .reduce((sum, payment) => sum + payment.amountMinor, 0);
-                        const payableMinor = Math.max(invoice.balanceDueMinor - pendingMinor, 0);
-                        return (
-                          <article className="record student-invoice" key={invoice.id}>
-                            <div className="record-main">
-                              <div>
-                                <h3>{invoice.invoiceNumber}</h3>
-                                <p>Issued {new Date(invoice.issuedAt).toLocaleDateString()} · Due {invoice.dueAt ? new Date(invoice.dueAt).toLocaleDateString() : 'date not specified'}</p>
-                                {invoice.lines.map((line) => <p key={line.id}>{line.description} · {formatMoney(line.lineAmountMinor, invoice.currency)}</p>)}
-                              </div>
-                              <span className={`status ${invoice.balanceDueMinor > 0 ? 'pending' : 'paid'}`}>
-                                {invoice.status === 'VOID' ? 'VOID' : invoice.balanceDueMinor > 0 ? 'DUE' : 'PAID'}
-                              </span>
-                            </div>
-                            <p><strong>Total:</strong> {formatMoney(invoice.invoiceTotalMinor, invoice.currency)} · <strong>Paid:</strong> {formatMoney(invoice.verifiedPaymentsMinor, invoice.currency)} · <strong>Balance:</strong> {formatMoney(invoice.balanceDueMinor, invoice.currency)}</p>
-                            {invoice.payments.length > 0 && (
-                              <div className="payment-history">
-                                <h4>Payment history & proof status</h4>
-                                {invoice.payments.map((payment) => (
-                                  <div className="payment-row" key={payment.id}>
-                                    <div>
-                                      <strong>{formatMoney(payment.amountMinor, invoice.currency)}</strong> · {payment.method.replace('_', ' ')} · <span className={`status ${payment.status.toLowerCase()}`}>{studentPaymentStatus(payment.status)}</span>
-                                      {payment.reference && <p>Reference: {payment.reference}</p>}
-                                      {payment.rejectionReason && <p className="form-error">Rejected: {payment.rejectionReason}</p>}
-                                    </div>
-                                    {payment.proofAvailable && <button className="button secondary small" type="button" disabled={downloadingPaymentId === payment.id} onClick={() => void downloadPaymentProof(payment)}>
-                                      {downloadingPaymentId === payment.id ? 'Downloading…' : 'Download receipt'}
-                                    </button>}
-                                  </div>
-                                ))}
-                              </div>
-                            )}
-                            {invoice.status === 'ISSUED' && payableMinor > 0 && (
-                              <details className="finance-action">
-                                <summary>Upload payment proof · up to {formatMoney(payableMinor, invoice.currency)}</summary>
-                                <form className="stack-form" onSubmit={(event) => void submitPayment(event, invoice)}>
-                                  <label>Amount paid<input name="amount" required type="number" min={0.01} max={payableMinor / 100} step={0.01} /></label>
-                                  <label>Payment method<select name="method" defaultValue="BANK_TRANSFER"><option value="BANK_TRANSFER">Bank transfer</option><option value="MOBILE_WALLET">Mobile wallet</option><option value="CASH">Cash</option></select></label>
-                                  <label>Transaction reference<input name="reference" maxLength={200} /></label>
-                                  <label>Notes<textarea name="proofNotes" maxLength={1000} rows={2} /></label>
-                                  <label>Screenshot / receipt<input name="proof" required type="file" accept="image/jpeg,image/png,image/webp,application/pdf" /></label>
-                                  <p className="muted">JPEG, PNG, WebP or PDF · maximum 5 MB.</p>
-                                  <button className="button primary" type="submit" disabled={paymentSubmittingId === invoice.id}>
-                                    {paymentSubmittingId === invoice.id ? 'Submitting…' : 'Submit payment for verification'}
-                                  </button>
-                                </form>
-                              </details>
-                            )}
-                          </article>
-                        );
-                      })}
-                    </div>
-                  )}
-                </section>
+                <StudentFeesPanel
+                  invoices={invoices}
+                  outstandingMinor={outstandingMinor}
+                  downloadingPaymentId={downloadingPaymentId}
+                  paymentSubmittingId={paymentSubmittingId}
+                  onDownloadProof={(payment) => void downloadPaymentProof(payment)}
+                  onSubmitPayment={(event, invoice) => void submitPayment(event, invoice)}
+                />
               )}
               {activeTab === 'complaints' && (
                 <>

@@ -36,7 +36,8 @@ const MODULES = [
   'invoices', 'payments', 'payment_proofs', 'visitors', 'gate_passes',
   'gate_events', 'mess', 'complaints', 'maintenance', 'inventory',
   'notifications', 'notices', 'reports', 'exports', 'audit_logs', 'users',
-  'roles', 'public_content',
+  'roles', 'public_content', 'offline_sync', 'backups', 'attendance',
+  'leave_requests', 'meal_attendance', 'meal_subscriptions', 'student_documents',
 ];
 
 const ACTIONS = [
@@ -58,6 +59,13 @@ const ROLE_PERMISSIONS: Record<string, Array<{ module: string; actions: Action[]
     { module: 'mess',          actions: ['view'] },
     { module: 'visitors',      actions: ['view', 'create', 'approve'] },
     { module: 'gate_passes',   actions: ['view', 'approve'] },
+    { module: 'attendance',    actions: ['view', 'create', 'edit'] },
+    { module: 'leave_requests', actions: ['view', 'approve'] },
+    { module: 'meal_attendance', actions: ['view'] },
+    { module: 'meal_subscriptions', actions: ['view', 'create', 'edit', 'manage_settings'] },
+    { module: 'student_documents', actions: ['view', 'create', 'edit', 'delete'] },
+    { module: 'allocations', actions: ['view', 'assign'] },
+    { module: 'exports', actions: ['export'] },
     { module: 'reports',       actions: ['view'] },
   ],
   'Receptionist': [
@@ -67,10 +75,14 @@ const ROLE_PERMISSIONS: Record<string, Array<{ module: string; actions: Action[]
     { module: 'complaints',    actions: ['view', 'create'] },
     { module: 'notices',       actions: ['view'] },
     { module: 'mess',          actions: ['view'] },
+    { module: 'attendance',    actions: ['view'] },
+    { module: 'leave_requests', actions: ['view'] },
+    { module: 'meal_attendance', actions: ['view'] },
+    { module: 'student_documents', actions: ['view'] },
   ],
   'Accountant': [
     { module: 'residents',     actions: ['view'] },
-    { module: 'invoices',      actions: ['view', 'create', 'edit'] },
+    { module: 'invoices',      actions: ['view', 'create', 'edit', 'assign', 'approve', 'manage_settings'] },
     { module: 'payments',      actions: ['view', 'create', 'verify', 'approve'] },
     { module: 'payment_proofs',actions: ['view', 'verify'] },
     { module: 'reports',       actions: ['view', 'export'] },
@@ -88,6 +100,8 @@ const ROLE_PERMISSIONS: Record<string, Array<{ module: string; actions: Action[]
   ],
   'Mess Staff': [
     { module: 'mess',          actions: ['view', 'create', 'edit'] },
+    { module: 'meal_attendance', actions: ['view', 'create', 'edit'] },
+    { module: 'meal_subscriptions', actions: ['view', 'create', 'edit', 'manage_settings'] },
     { module: 'residents',     actions: ['view'] },
     { module: 'complaints',    actions: ['view', 'create'] },
   ],
@@ -105,11 +119,27 @@ const ROLE_PERMISSIONS: Record<string, Array<{ module: string; actions: Action[]
     { module: 'payment_proofs',actions: ['view', 'create'] },
     { module: 'complaints',    actions: ['view', 'create'] },
     { module: 'gate_passes',   actions: ['view', 'create'] },
+    { module: 'attendance',    actions: ['view'] },
+    { module: 'leave_requests', actions: ['view', 'create'] },
+    { module: 'meal_attendance', actions: ['view'] },
+    { module: 'meal_subscriptions', actions: ['view'] },
+    { module: 'student_documents', actions: ['view', 'create'] },
     { module: 'mess',          actions: ['view'] },
     { module: 'notices',       actions: ['view'] },
     { module: 'notifications', actions: ['view'] },
   ],
 };
+
+for (const [roleName, permissions] of Object.entries(ROLE_PERMISSIONS)) {
+  if (roleName !== 'System Admin' && roleName !== 'Owner') {
+    permissions.push(
+      { module: 'branches', actions: ['view'] },
+      { module: 'users', actions: ['view'] },
+      { module: 'offline_sync', actions: ['view'] },
+      { module: 'notifications', actions: ['view'] },
+    );
+  }
+}
 
 async function ensurePermissions() {
   for (const module of MODULES) {
@@ -177,6 +207,28 @@ async function createTenantWithData(
     update: {},
     create: { slug, name, status: TenantStatus.ACTIVE, timezone: 'Asia/Karachi', currency: 'PKR', settings: {} },
   });
+
+  const currentSubscription = await prisma.tenantSubscription.findFirst({
+    where: { tenantId: tenant.id, status: { in: ['TRIAL', 'ACTIVE', 'SUSPENDED'] } },
+    select: { id: true },
+  });
+  if (!currentSubscription) {
+    const trialSettings = await prisma.trialSettings.findUnique({ where: { id: 1 } });
+    if (!trialSettings) throw new Error('Apply the SaaS migration before seeding tenant subscriptions.');
+    const startedAt = new Date();
+    const endsAt = new Date(startedAt.getTime() + trialSettings.durationDays * 86_400_000);
+    await prisma.tenantSubscription.create({
+      data: {
+        tenantId: tenant.id,
+        planId: trialSettings.trialPlanId,
+        status: 'TRIAL',
+        trialStartedAt: startedAt,
+        trialEndsAt: endsAt,
+        periodStartedAt: startedAt,
+        periodEndsAt: endsAt,
+      },
+    });
+  }
 
   // System roles
   for (const [roleName, permDef] of Object.entries(ROLE_PERMISSIONS)) {
@@ -339,6 +391,17 @@ async function seedOperationalData(
       userFor('maintenance'),
     ]);
 
+  await prisma.userGateScope.upsert({
+    where: { userId_branchId_gateRef: { userId: security.id, branchId, gateRef: 'MAIN-GATE' } },
+    update: {},
+    create: { userId: security.id, branchId, gateRef: 'MAIN-GATE' },
+  });
+  await prisma.userMessScope.upsert({
+    where: { userId_branchId: { userId: messStaff.id, branchId } },
+    update: {},
+    create: { userId: messStaff.id, branchId },
+  });
+
   const primaryResident = await prisma.resident.findFirstOrThrow({
     where: { tenantId, branchId, userId: residentUser.id, deletedAt: null },
   });
@@ -346,6 +409,9 @@ async function seedOperationalData(
   for (const [firstName, lastName, email] of [
     ['Ayesha', 'Khan', `ayesha.khan@${slug}.demo`],
     ['Bilal', 'Ahmed', `bilal.ahmed@${slug}.demo`],
+    ['Sana', 'Ali', `sana.ali@${slug}.demo`],
+    ['Omar', 'Raza', `omar.raza@${slug}.demo`],
+    ['Hira', 'Malik', `hira.malik@${slug}.demo`],
   ]) {
     let resident = await prisma.resident.findFirst({
       where: { tenantId, branchId, email, deletedAt: null },
@@ -357,7 +423,52 @@ async function seedOperationalData(
     }
     extraResidents.push(resident);
   }
-  const [pendingResident, approvedResident] = extraResidents;
+  const [pendingResident, approvedResident, rejectedResident, checkedOutResident, cancelledResident] = extraResidents;
+
+  const residentRole = await prisma.role.findFirstOrThrow({
+    where: { tenantId, name: 'Resident', isSystemRole: true },
+    select: { id: true },
+  });
+  const residentPasswordHash = await hashPassword('Demo1234!');
+  for (const resident of extraResidents) {
+    const email = resident.email;
+    if (!email) throw new Error(`Missing email for demo resident ${resident.id}`);
+    const studentUser = await prisma.user.upsert({
+      where: { tenantId_email: { tenantId, email } },
+      update: {},
+      create: {
+        tenantId,
+        email,
+        passwordHash: residentPasswordHash,
+        status: UserStatus.ACTIVE,
+      },
+    });
+    await prisma.userRole.upsert({
+      where: {
+        userId_tenantId_roleId: {
+          userId: studentUser.id,
+          tenantId,
+          roleId: residentRole.id,
+        },
+      },
+      update: {},
+      create: { userId: studentUser.id, tenantId, roleId: residentRole.id },
+    });
+    await prisma.userBranchScope.upsert({
+      where: { userId_branchId: { userId: studentUser.id, branchId } },
+      update: {},
+      create: { userId: studentUser.id, branchId },
+    });
+    if (resident.userId && resident.userId !== studentUser.id) {
+      throw new Error(`Demo resident ${email} is already linked to another user`);
+    }
+    if (!resident.userId) {
+      await prisma.resident.update({
+        where: { id: resident.id },
+        data: { userId: studentUser.id },
+      });
+    }
+  }
 
   let building = await prisma.building.findFirst({
     where: { tenantId, branchId, name: 'Demo Residence' },
@@ -417,12 +528,16 @@ async function seedOperationalData(
     [primaryResident, AdmissionStatus.CHECKED_IN, 'TEST DATA: checked-in resident'],
     [pendingResident, AdmissionStatus.PENDING, 'TEST DATA: pending admission'],
     [approvedResident, AdmissionStatus.APPROVED, 'TEST DATA: approved admission'],
+    [rejectedResident, AdmissionStatus.REJECTED, 'TEST DATA: rejected admission'],
+    [checkedOutResident, AdmissionStatus.CHECKED_OUT, 'TEST DATA: checked-out resident'],
+    [cancelledResident, AdmissionStatus.CANCELLED, 'TEST DATA: cancelled admission'],
   ] as const) {
     let admission = await prisma.admission.findFirst({
       where: { tenantId, residentId: resident.id, notes: note, deletedAt: null },
     });
     if (!admission) {
       const decided = status !== AdmissionStatus.PENDING;
+      const now = new Date();
       admission = await prisma.admission.create({
         data: {
           tenantId,
@@ -430,9 +545,15 @@ async function seedOperationalData(
           residentId: resident.id,
           status,
           notes: note,
-          requestedCheckInAt: new Date(),
-          ...(decided && { decidedByUserId: warden.id, decidedAt: new Date() }),
-          ...(status === AdmissionStatus.CHECKED_IN && { checkedInAt: new Date() }),
+          requestedCheckInAt: now,
+          ...(decided && { decidedByUserId: warden.id, decidedAt: now }),
+          ...((status === AdmissionStatus.CHECKED_IN || status === AdmissionStatus.CHECKED_OUT) && {
+            checkedInAt: now,
+          }),
+          ...(status === AdmissionStatus.CHECKED_OUT && { checkedOutAt: now }),
+          ...(status === AdmissionStatus.REJECTED && {
+            rejectionReason: 'Demo rejection for manual workflow testing',
+          }),
         },
       });
     }
@@ -459,6 +580,43 @@ async function seedOperationalData(
     await prisma.bed.update({
       where: { id: occupiedBed.id },
       data: { status: BedStatus.OCCUPIED },
+    });
+  }
+  const reservedAllocation = await prisma.bedAllocation.findFirst({
+    where: { tenantId, admissionId: admissions[2].id, status: AllocationStatus.RESERVED },
+  });
+  if (!reservedAllocation) {
+    await prisma.bedAllocation.create({
+      data: {
+        tenantId,
+        branchId,
+        admissionId: admissions[2].id,
+        residentId: approvedResident.id,
+        bedId: beds[1].id,
+        status: AllocationStatus.RESERVED,
+      },
+    });
+    await prisma.bed.update({
+      where: { id: beds[1].id },
+      data: { status: BedStatus.RESERVED },
+    });
+  }
+  const endedAllocation = await prisma.bedAllocation.findFirst({
+    where: { tenantId, admissionId: admissions[4].id, status: AllocationStatus.ENDED },
+  });
+  if (!endedAllocation) {
+    const checkedInAt = admissions[4].checkedInAt ?? new Date();
+    await prisma.bedAllocation.create({
+      data: {
+        tenantId,
+        branchId,
+        admissionId: admissions[4].id,
+        residentId: checkedOutResident.id,
+        bedId: beds[2].id,
+        status: AllocationStatus.ENDED,
+        checkedInAt,
+        endedAt: admissions[4].checkedOutAt ?? new Date(),
+      },
     });
   }
 
@@ -504,6 +662,44 @@ async function seedOperationalData(
     invoiceFor(primaryResident.id, 'DEMO-INV-001', 'Monthly accommodation'),
     invoiceFor(approvedResident.id, 'DEMO-INV-002', 'Admission and accommodation'),
   ]);
+  let overdueInvoice = await prisma.invoice.findFirst({
+    where: { tenantId, invoiceNumber: 'DEMO-INV-003', deletedAt: null },
+  });
+  if (!overdueInvoice) {
+    overdueInvoice = await prisma.invoice.create({
+      data: {
+        id: randomUUID(),
+        tenantId,
+        branchId,
+        residentId: pendingResident.id,
+        invoiceNumber: 'DEMO-INV-003',
+        currency: 'PKR',
+        createdByUserId: accountant.id,
+        dueAt: new Date(Date.now() - 14 * 24 * 60 * 60 * 1000),
+        notes: 'Development test overdue invoice with multiple lines',
+        lines: {
+          create: [
+            {
+              tenantId,
+              branchId,
+              description: 'Monthly accommodation',
+              quantity: 1,
+              unitAmountMinor: 2000000,
+              lineAmountMinor: 2000000,
+            },
+            {
+              tenantId,
+              branchId,
+              description: 'Mess charges',
+              quantity: 1,
+              unitAmountMinor: 500000,
+              lineAmountMinor: 500000,
+            },
+          ],
+        },
+      },
+    });
+  }
   const paymentRecords = [
     {
       invoice: invoices[0],
@@ -514,6 +710,11 @@ async function seedOperationalData(
       invoice: invoices[1],
       reference: 'DEMO-PAY-VERIFIED',
       status: PaymentStatus.VERIFIED,
+    },
+    {
+      invoice: overdueInvoice,
+      reference: 'DEMO-PAY-REJECTED',
+      status: PaymentStatus.REJECTED,
     },
   ];
   for (const payment of paymentRecords) {
@@ -536,9 +737,40 @@ async function seedOperationalData(
             verifiedByUserId: accountant.id,
             verifiedAt: new Date(),
           }),
+          ...(payment.status === PaymentStatus.REJECTED && {
+            verifiedByUserId: accountant.id,
+            verifiedAt: new Date(),
+            rejectionReason: 'Demo rejected payment for manual workflow testing',
+          }),
         },
       });
     }
+  }
+
+  const refundSubmissionKey = '9a8b7c6d-5e4f-4a3b-8c2d-1e0f9a8b7c6d';
+  const existingRefund = await prisma.refund.findFirst({
+    where: {
+      tenantId,
+      branchId,
+      invoiceId: invoices[1].id,
+      recordedByUserId: accountant.id,
+      submissionKey: refundSubmissionKey,
+    },
+  });
+  if (!existingRefund) {
+    await prisma.refund.create({
+      data: {
+        tenantId,
+        branchId,
+        invoiceId: invoices[1].id,
+        amountMinor: 200000,
+        method: PaymentMethod.BANK_TRANSFER,
+        reference: 'DEMO-REFUND-001',
+        notes: 'Synthetic development test refund',
+        submissionKey: refundSubmissionKey,
+        recordedByUserId: accountant.id,
+      },
+    });
   }
 
   const complaints = [
@@ -554,6 +786,18 @@ async function seedOperationalData(
       status: ComplaintStatus.IN_PROGRESS,
       priority: ComplaintPriority.HIGH,
     },
+    {
+      title: 'Demo: Resolved water issue',
+      description: 'A sample resolved complaint for status and history testing.',
+      status: ComplaintStatus.RESOLVED,
+      priority: ComplaintPriority.NORMAL,
+    },
+    {
+      title: 'Demo: Closed noise report',
+      description: 'A sample closed complaint for status and history testing.',
+      status: ComplaintStatus.CLOSED,
+      priority: ComplaintPriority.LOW,
+    },
   ];
   for (const complaint of complaints) {
     const existing = await prisma.complaint.findFirst({
@@ -567,6 +811,7 @@ async function seedOperationalData(
           ...complaint,
           submittedByUserId: residentUser.id,
           assignedToUserId: maintenance.id,
+          ...(complaint.status === ComplaintStatus.RESOLVED && { resolvedAt: new Date() }),
         },
       });
     }
@@ -626,14 +871,23 @@ async function seedOperationalData(
 
   const visits = [
     { visitorName: 'Demo Pending Visitor', purpose: 'Family visit', status: VisitorVisitStatus.PENDING },
+    { visitorName: 'Demo Approved Visitor', purpose: 'Family visit', status: VisitorVisitStatus.APPROVED },
+    { visitorName: 'Demo Rejected Visitor', purpose: 'Resident visit', status: VisitorVisitStatus.REJECTED },
     { visitorName: 'Demo Checked-in Visitor', purpose: 'Resident visit', status: VisitorVisitStatus.CHECKED_IN },
+    { visitorName: 'Demo Checked-out Visitor', purpose: 'Family visit', status: VisitorVisitStatus.CHECKED_OUT },
   ];
   for (const visit of visits) {
     const existing = await prisma.visitorVisit.findFirst({
       where: { tenantId, branchId, visitorName: visit.visitorName, purpose: visit.purpose },
     });
     if (!existing) {
-      const approved = visit.status === VisitorVisitStatus.CHECKED_IN;
+      const approved =
+        visit.status === VisitorVisitStatus.APPROVED ||
+        visit.status === VisitorVisitStatus.CHECKED_IN ||
+        visit.status === VisitorVisitStatus.CHECKED_OUT;
+      const checkedIn =
+        visit.status === VisitorVisitStatus.CHECKED_IN ||
+        visit.status === VisitorVisitStatus.CHECKED_OUT;
       await prisma.visitorVisit.create({
         data: {
           tenantId,
@@ -647,8 +901,14 @@ async function seedOperationalData(
           ...(approved && {
             approvedByUserId: warden.id,
             approvedAt: new Date(),
+          }),
+          ...(checkedIn && {
             checkedInByUserId: security.id,
             checkedInAt: new Date(),
+          }),
+          ...(visit.status === VisitorVisitStatus.CHECKED_OUT && {
+            checkedOutByUserId: security.id,
+            checkedOutAt: new Date(),
           }),
         },
       });

@@ -20,10 +20,13 @@ import { BranchesModule } from './modules/branches/branches.module';
 import { PublicHostelsModule } from './modules/public-hostels/public-hostels.module';
 import { FinanceModule } from './modules/finance/finance.module';
 import { Phase4Module } from './modules/phase4/phase4.module';
-import { Phase5Module } from './modules/phase5/phase5.module';
+import { VisitorsModule } from './modules/visitors/visitors.module';
 import { Phase6Module } from './modules/phase6/phase6.module';
 import { TenantContextInterceptor } from './common/middleware/tenant-context.middleware';
 import { PlatformAdminModule } from './modules/platform-admin/platform-admin.module';
+import { HostelServicesModule } from './modules/hostel-services/hostel-services.module';
+import { NotificationsModule } from './modules/notifications/notifications.module';
+import { TenantManagementModule } from './modules/users/tenant-management.module';
 
 const apiRateLimitPerMinute = Number(process.env.API_RATE_LIMIT_PER_MINUTE ?? '10000');
 if (!Number.isSafeInteger(apiRateLimitPerMinute) || apiRateLimitPerMinute < 1) {
@@ -51,9 +54,12 @@ if (!Number.isSafeInteger(apiRateLimitPerMinute) || apiRateLimitPerMinute < 1) {
     PublicHostelsModule,
     FinanceModule,
     Phase4Module,
-    Phase5Module,
+    VisitorsModule,
     Phase6Module,
     PlatformAdminModule,
+    HostelServicesModule,
+    NotificationsModule,
+    TenantManagementModule,
   ],
   providers: [
     // Global guard chain: L1 Auth → L2 Tenant → L4 Permission

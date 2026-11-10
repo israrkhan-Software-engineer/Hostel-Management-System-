@@ -3,9 +3,11 @@ import {
   ConflictException,
   Injectable,
   NotFoundException,
+  Optional,
 } from '@nestjs/common';
 import { AdmissionStatus, Resident } from '@prisma/client';
 import { AuditService } from '../audit/audit.service';
+import { NotificationsService } from '../notifications/notifications.service';
 import { PrismaService } from '../../common/prisma/prisma.service';
 import { hasPrismaErrorCode } from '../../common/utils/prisma-error.util';
 import {
@@ -21,6 +23,7 @@ export class AdmissionsService {
     private readonly prisma: PrismaService,
     private readonly residents: ResidentsService,
     private readonly audit: AuditService,
+    @Optional() private readonly notifications?: NotificationsService,
   ) {}
 
   async list(tenantId: string, branchId: string, status?: AdmissionStatus) {
@@ -104,6 +107,16 @@ export class AdmissionsService {
       entityId: admission.id,
       outcome: 'success',
     });
+    await this.notifications?.notifyResident({
+      tenantId,
+      branchId,
+      residentId: admission.residentId,
+      category: 'admission',
+      title: 'Admission request received',
+      body: 'Your hostel admission request has been received and is pending review.',
+      emailSubject: 'Hostel admission request received',
+      deduplicationKey: `admission-created:${admission.id}`,
+    });
     const { resident: admissionResident, ...result } = admission;
     return { ...result, resident: this.residents.presentForAdmission(admissionResident) };
   }
@@ -154,7 +167,20 @@ export class AdmissionsService {
       entityId: admissionId,
       outcome: 'success',
     });
-    return this.get(tenantId, branchId, admissionId);
+    const admission = await this.get(tenantId, branchId, admissionId);
+    await this.notifications?.notifyResident({
+      tenantId,
+      branchId,
+      residentId: admission.residentId,
+      category: 'admission',
+      title: `Admission ${dto.decision.toLowerCase()}`,
+      body: dto.decision === 'APPROVED'
+        ? 'Your hostel admission request has been approved.'
+        : `Your hostel admission request has been rejected. ${dto.rejectionReason?.trim() ?? ''}`.trim(),
+      emailSubject: `Hostel admission ${dto.decision.toLowerCase()}`,
+      deduplicationKey: `admission-decision:${admissionId}`,
+    });
+    return admission;
   }
 
   async update(

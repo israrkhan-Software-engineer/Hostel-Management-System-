@@ -44,7 +44,9 @@ export class BranchScopeGuard implements CanActivate {
       req.query?.['branchId'] ??
       req.body?.['branchId'];
 
-    if (!branchId) return true; // No branch filter — let the service handle it
+    if (!branchId) {
+      throw new ForbiddenException('A branch context is required');
+    }
 
     const user = req.user;
     return this.prisma.runWithTenantContext(user.tenantId, async () => {

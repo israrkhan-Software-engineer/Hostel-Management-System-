@@ -1,10 +1,11 @@
 import { SetMetadata } from '@nestjs/common';
+import { PermissionAction } from '@prisma/client';
 
 export const PERMISSION_KEY = 'requiredPermission';
 
 export interface RequiredPermission {
   module: string;
-  action: string;
+  action: PermissionAction;
 }
 
 /**
@@ -16,5 +17,5 @@ export interface RequiredPermission {
  * @RequirePermission('residents', 'view')
  * @RequirePermission('exports', 'export')
  */
-export const RequirePermission = (module: string, action: string) =>
+export const RequirePermission = (module: string, action: PermissionAction) =>
   SetMetadata(PERMISSION_KEY, { module, action } as RequiredPermission);

@@ -120,9 +120,92 @@ enum VisitorVisitStatus {
   CHECKED_OUT
 }
 
+enum StudentAttendanceStatus {
+  PRESENT
+  ABSENT
+  LEAVE
+}
+
+enum LeaveRequestStatus {
+  PENDING
+  APPROVED
+  REJECTED
+  CANCELLED
+}
+
+enum StudentGatePassStatus {
+  PENDING
+  APPROVED
+  REJECTED
+  RETURNED
+}
+
+enum MealAttendanceStatus {
+  PRESENT
+  ABSENT
+}
+
+enum MealSubscriptionStatus {
+  ACTIVE
+  INACTIVE
+  EXPIRED
+}
+
+enum StudentDocumentCategory {
+  CNIC
+  B_FORM
+  PHOTO
+  ADMISSION
+  OTHER
+}
+
 enum PlatformAdminStatus {
   ACTIVE
   DEACTIVATED
+}
+
+enum BillingInterval {
+  MONTHLY
+  QUARTERLY
+  YEARLY
+}
+
+enum SubscriptionStatus {
+  TRIAL
+  ACTIVE
+  SUSPENDED
+  EXPIRED
+  CANCELLED
+}
+
+enum PlatformInvoiceStatus {
+  PENDING
+  PAID
+  VOID
+}
+
+enum PlatformPaymentMethod {
+  CASH
+  BANK_TRANSFER
+  CARD
+  OTHER
+}
+
+enum DiscountType {
+  FIXED
+  PERCENTAGE
+  SCHOLARSHIP
+}
+
+enum LateFeeType {
+  FIXED
+  PERCENTAGE
+}
+
+enum DepositTransactionType {
+  DEPOSIT
+  ADJUSTMENT
+  REFUND
 }
 
 // Permission actions — 10 types per SRS V2 §3 / Handover §5
@@ -146,12 +229,12 @@ enum PermissionAction {
 // ─────────────────────────────────────────────────────────────────────────────
 
 model Tenant {
-  id     String       @id @default(uuid()) @db.Uuid
+  id              String       @id @default(uuid()) @db.Uuid
   /// System-generated, never reused, never accepted from client (SRS V2 §13.1)
-  name   String
-  slug   String       @unique
-  locationAddress String @default("") @map("location_address")
-  status TenantStatus @default(PROVISIONING)
+  name            String
+  slug            String       @unique
+  locationAddress String       @default("") @map("location_address")
+  status          TenantStatus @default(PROVISIONING)
 
   /// Proposed default: Asia/Karachi (SRS V2 NFR-020, pending G-04/OD-08)
   timezone String @default("Asia/Karachi")
@@ -166,26 +249,47 @@ model Tenant {
   deletedAt DateTime? @map("deleted_at") // soft delete
 
   // Relations
-  branches            Branch[]
-  buildings           Building[]
-  floors              Floor[]
-  rooms               Room[]
-  beds                Bed[]
-  users               User[]
-  roles               Role[]
-  userTenantMembers   UserTenantMembership[]
-  refreshTokens       RefreshToken[]
-  passwordResetTokens PasswordResetToken[]
-  residents           Resident[]
-  admissions          Admission[]
-  allocations         BedAllocation[]
-  invoices            Invoice[]
-  payments            Payment[]
-  refunds             Refund[]
-  messMenus           MessMenu[]
-  complaints          Complaint[]
-  notices             Notice[]
-  visitorVisits       VisitorVisit[]
+  branches                Branch[]
+  buildings               Building[]
+  floors                  Floor[]
+  rooms                   Room[]
+  beds                    Bed[]
+  users                   User[]
+  roles                   Role[]
+  userTenantMembers       UserTenantMembership[]
+  refreshTokens           RefreshToken[]
+  passwordResetTokens     PasswordResetToken[]
+  userMfaRecoveryCodes    UserMfaRecoveryCode[]
+  residents               Resident[]
+  admissions              Admission[]
+  allocations             BedAllocation[]
+  invoices                Invoice[]
+  payments                Payment[]
+  refunds                 Refund[]
+  messMenus               MessMenu[]
+  complaints              Complaint[]
+  notices                 Notice[]
+  visitorVisits           VisitorVisit[]
+  attendanceRecords       AttendanceRecord[]
+  leaveRequests           LeaveRequest[]
+  gatePasses              StudentGatePass[]
+  mealAttendance          MealAttendance[]
+  mealSubscriptionPlans   MealSubscriptionPlan[]
+  mealSubscriptions       MealSubscription[]
+  studentDocuments        StudentDocument[]
+  roomTransfers           RoomTransfer[]
+  feeStructures           FeeStructure[]
+  feeAssignments          FeeAssignment[]
+  lateFeeSettings         LateFeeSetting[]
+  lateFeeHistory          LateFeeHistory[]
+  studentDiscounts        StudentDiscount[]
+  securityDeposits        SecurityDepositTransaction[]
+  notifications           Notification[]
+  notificationPreferences NotificationPreference[]
+  subscriptions           TenantSubscription[]
+  subscriptionHistory     SubscriptionHistory[]
+  platformInvoices        PlatformInvoice[]
+  platformPayments        PlatformPayment[]
 
   @@map("tenants")
 }
@@ -235,6 +339,116 @@ model PlatformAdminAuditLog {
   @@map("platform_admin_audit_logs")
 }
 
+model SubscriptionPlan {
+  id                String   @id @default(uuid()) @db.Uuid
+  name              String   @unique
+  description       String?
+  monthlyPriceMinor Int      @map("monthly_price_minor")
+  yearlyPriceMinor  Int      @map("yearly_price_minor")
+  currency          String   @default("PKR")
+  userLimit         Int      @map("user_limit")
+  branchLimit       Int      @map("branch_limit")
+  features          Json     @default("{}")
+  isActive          Boolean  @default(true) @map("is_active")
+  createdAt         DateTime @default(now()) @map("created_at")
+  updatedAt         DateTime @updatedAt @map("updated_at")
+
+  subscriptions TenantSubscription[]
+  trialSettings TrialSettings[]
+
+  @@map("subscription_plans")
+}
+
+model TenantSubscription {
+  id              String             @id @default(uuid()) @db.Uuid
+  tenantId        String             @map("tenant_id") @db.Uuid
+  tenant          Tenant             @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  planId          String             @map("plan_id") @db.Uuid
+  plan            SubscriptionPlan   @relation(fields: [planId], references: [id])
+  status          SubscriptionStatus @default(TRIAL)
+  billingInterval BillingInterval    @default(MONTHLY) @map("billing_interval")
+  trialStartedAt  DateTime?          @map("trial_started_at")
+  trialEndsAt     DateTime?          @map("trial_ends_at")
+  periodStartedAt DateTime           @map("period_started_at")
+  periodEndsAt    DateTime           @map("period_ends_at")
+  suspendedAt     DateTime?          @map("suspended_at")
+  cancelledAt     DateTime?          @map("cancelled_at")
+  createdAt       DateTime           @default(now()) @map("created_at")
+  updatedAt       DateTime           @updatedAt @map("updated_at")
+
+  invoices PlatformInvoice[]
+  history  SubscriptionHistory[]
+
+  @@index([tenantId, status, periodEndsAt])
+  @@index([planId, status])
+  @@map("tenant_subscriptions")
+}
+
+model SubscriptionHistory {
+  id              String              @id @default(uuid()) @db.Uuid
+  tenantId        String              @map("tenant_id") @db.Uuid
+  tenant          Tenant              @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  subscriptionId  String?             @map("subscription_id") @db.Uuid
+  subscription    TenantSubscription? @relation(fields: [subscriptionId], references: [id], onDelete: SetNull)
+  platformAdminId String              @map("platform_admin_id") @db.Uuid
+  event           String
+  details         Json                @default("{}")
+  createdAt       DateTime            @default(now()) @map("created_at")
+
+  @@index([tenantId, createdAt])
+  @@map("subscription_history")
+}
+
+model TrialSettings {
+  id               Int              @id @default(1)
+  durationDays     Int              @default(14) @map("duration_days")
+  trialPlanId      String           @map("trial_plan_id") @db.Uuid
+  trialPlan        SubscriptionPlan @relation(fields: [trialPlanId], references: [id])
+  notifyDaysBefore Int              @default(3) @map("notify_days_before")
+  updatedAt        DateTime         @updatedAt @map("updated_at")
+
+  @@map("trial_settings")
+}
+
+model PlatformInvoice {
+  id             String                @id @default(uuid()) @db.Uuid
+  tenantId       String                @map("tenant_id") @db.Uuid
+  tenant         Tenant                @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  subscriptionId String                @map("subscription_id") @db.Uuid
+  subscription   TenantSubscription    @relation(fields: [subscriptionId], references: [id], onDelete: Restrict)
+  invoiceNumber  String                @unique @map("invoice_number")
+  description    String
+  amountMinor    Int                   @map("amount_minor")
+  currency       String
+  status         PlatformInvoiceStatus @default(PENDING)
+  dueAt          DateTime              @map("due_at")
+  paidAt         DateTime?             @map("paid_at")
+  createdAt      DateTime              @default(now()) @map("created_at")
+
+  payments PlatformPayment[]
+
+  @@index([tenantId, status, dueAt])
+  @@map("platform_invoices")
+}
+
+model PlatformPayment {
+  id             String                @id @default(uuid()) @db.Uuid
+  tenantId       String                @map("tenant_id") @db.Uuid
+  tenant         Tenant                @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  invoiceId      String                @map("invoice_id") @db.Uuid
+  invoice        PlatformInvoice       @relation(fields: [invoiceId], references: [id], onDelete: Restrict)
+  amountMinor    Int                   @map("amount_minor")
+  method         PlatformPaymentMethod
+  reference      String?
+  idempotencyKey String                @unique @map("idempotency_key")
+  recordedBy     String                @map("recorded_by") @db.Uuid
+  receivedAt     DateTime              @default(now()) @map("received_at")
+  notes          String?
+
+  @@index([tenantId, receivedAt])
+  @@map("platform_payments")
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // BRANCHES and PHYSICAL HIERARCHY
 // Tenant → Branch → Building → Floor → Room → Bed (SRS V2 §13.4 / DB §4)
@@ -262,22 +476,37 @@ model Branch {
   deletedAt DateTime? @map("deleted_at")
 
   // Relations
-  buildings       Building[]
-  rooms           Room[]
-  beds            Bed[]
-  userBranchScope UserBranchScope[]
-  userGateScope   UserGateScope[]
-  userMessScope   UserMessScope[]
-  residents       Resident[]
-  admissions      Admission[]
-  allocations     BedAllocation[]
-  invoices        Invoice[]
-  payments        Payment[]
-  refunds         Refund[]
-  messMenus       MessMenu[]
-  complaints      Complaint[]
-  notices         Notice[]
-  visitorVisits   VisitorVisit[]
+  buildings             Building[]
+  rooms                 Room[]
+  beds                  Bed[]
+  userBranchScope       UserBranchScope[]
+  userGateScope         UserGateScope[]
+  userMessScope         UserMessScope[]
+  residents             Resident[]
+  admissions            Admission[]
+  allocations           BedAllocation[]
+  invoices              Invoice[]
+  payments              Payment[]
+  refunds               Refund[]
+  messMenus             MessMenu[]
+  complaints            Complaint[]
+  notices               Notice[]
+  visitorVisits         VisitorVisit[]
+  attendanceRecords     AttendanceRecord[]
+  leaveRequests         LeaveRequest[]
+  gatePasses            StudentGatePass[]
+  mealAttendance        MealAttendance[]
+  mealSubscriptionPlans MealSubscriptionPlan[]
+  mealSubscriptions     MealSubscription[]
+  studentDocuments      StudentDocument[]
+  roomTransfers         RoomTransfer[]
+  feeStructures         FeeStructure[]
+  feeAssignments        FeeAssignment[]
+  lateFeeSettings       LateFeeSetting[]
+  lateFeeHistory        LateFeeHistory[]
+  studentDiscounts      StudentDiscount[]
+  securityDeposits      SecurityDepositTransaction[]
+  notifications         Notification[]
 
   @@unique([tenantId, code])
   @@map("branches")
@@ -357,10 +586,12 @@ model Bed {
   code   String
   status BedStatus @default(AVAILABLE)
 
-  createdAt   DateTime        @default(now()) @map("created_at")
-  updatedAt   DateTime        @updatedAt @map("updated_at")
-  deletedAt   DateTime?       @map("deleted_at")
-  allocations BedAllocation[]
+  createdAt     DateTime        @default(now()) @map("created_at")
+  updatedAt     DateTime        @updatedAt @map("updated_at")
+  deletedAt     DateTime?       @map("deleted_at")
+  allocations   BedAllocation[]
+  transfersFrom RoomTransfer[]  @relation("RoomTransferFromBed")
+  transfersTo   RoomTransfer[]  @relation("RoomTransferToBed")
 
   @@unique([tenantId, roomId, code])
   @@index([tenantId, branchId, status, deletedAt])
@@ -379,19 +610,22 @@ model User {
   tenantId String @map("tenant_id") @db.Uuid // primary tenant (the one this account was created for)
   tenant   Tenant @relation(fields: [tenantId], references: [id])
 
-  firstName String? @map("first_name")
-  lastName  String? @map("last_name")
+  firstName    String? @map("first_name")
+  lastName     String? @map("last_name")
   email        String?
   phone        String?
-  /// argon2 or bcrypt hash — NEVER store plain text (SRS V2 NFR-003)
+  /// Scrypt hash; existing PBKDF2 hashes are upgraded on successful authentication.
   passwordHash String  @map("password_hash")
 
   status      UserStatus @default(ACTIVE)
   lastLoginAt DateTime?  @map("last_login_at")
 
   /// Optional MFA — scope of mandatory MFA is ❓ G-05/OD-32
-  mfaEnabled         Boolean @default(false) @map("mfa_enabled")
-  mfaSecretEncrypted String? @map("mfa_secret_encrypted") // field-encrypted with FIELD_ENCRYPTION_KEY
+  mfaEnabled                   Boolean   @default(false) @map("mfa_enabled")
+  mfaSecretEncrypted           String?   @map("mfa_secret_encrypted") // field-encrypted with FIELD_ENCRYPTION_KEY
+  mfaEnrollmentSecretEncrypted String?   @map("mfa_enrollment_secret_encrypted")
+  failedLoginAttempts          Int       @default(0) @map("failed_login_attempts")
+  lockedUntil                  DateTime? @map("locked_until")
 
   /// Increment on deactivation or password change to invalidate all tokens (DB §5)
   tokenVersion Int @default(0) @map("token_version")
@@ -401,28 +635,61 @@ model User {
   deletedAt DateTime? @map("deleted_at")
 
   // Relations
-  tenantMemberships       UserTenantMembership[]
-  branchScopes            UserBranchScope[]
-  gateScopes              UserGateScope[]
-  messScopes              UserMessScope[]
-  userRoles               UserRole[]
-  refreshTokens           RefreshToken[]
-  passwordResetTokens     PasswordResetToken[]
-  admissionsDecided       Admission[]            @relation("AdmissionDecisionActor")
-  messMenusCreated        MessMenu[]             @relation("MessMenuCreator")
-  complaintsSubmitted     Complaint[]            @relation("ComplaintSubmitter")
-  complaintsAssigned      Complaint[]            @relation("ComplaintAssignee")
-  noticesCreated          Notice[]               @relation("NoticeCreator")
-  visitorVisitsCreated    VisitorVisit[]         @relation("VisitorVisitCreator")
-  visitorVisitsApproved   VisitorVisit[]         @relation("VisitorVisitApprover")
-  visitorVisitsCheckedIn  VisitorVisit[]         @relation("VisitorVisitCheckInActor")
-  visitorVisitsCheckedOut VisitorVisit[]         @relation("VisitorVisitCheckOutActor")
-  residentProfile         Resident?
+  tenantMemberships            UserTenantMembership[]
+  branchScopes                 UserBranchScope[]
+  gateScopes                   UserGateScope[]
+  messScopes                   UserMessScope[]
+  userRoles                    UserRole[]
+  refreshTokens                RefreshToken[]
+  passwordResetTokens          PasswordResetToken[]
+  mfaRecoveryCodes             UserMfaRecoveryCode[]
+  admissionsDecided            Admission[]                  @relation("AdmissionDecisionActor")
+  messMenusCreated             MessMenu[]                   @relation("MessMenuCreator")
+  complaintsSubmitted          Complaint[]                  @relation("ComplaintSubmitter")
+  complaintsAssigned           Complaint[]                  @relation("ComplaintAssignee")
+  noticesCreated               Notice[]                     @relation("NoticeCreator")
+  visitorVisitsCreated         VisitorVisit[]               @relation("VisitorVisitCreator")
+  visitorVisitsApproved        VisitorVisit[]               @relation("VisitorVisitApprover")
+  visitorVisitsCheckedIn       VisitorVisit[]               @relation("VisitorVisitCheckInActor")
+  visitorVisitsCheckedOut      VisitorVisit[]               @relation("VisitorVisitCheckOutActor")
+  attendanceMarked             AttendanceRecord[]           @relation("AttendanceMarker")
+  leaveRequestsDecided         LeaveRequest[]               @relation("LeaveDecisionActor")
+  gatePassesDecided            StudentGatePass[]            @relation("GatePassDecisionActor")
+  gatePassesReturned           StudentGatePass[]            @relation("GatePassReturnActor")
+  mealAttendanceMarked         MealAttendance[]             @relation("MealAttendanceMarker")
+  mealSubscriptionPlansCreated MealSubscriptionPlan[]       @relation("MealSubscriptionPlanCreator")
+  mealSubscriptionsActivated   MealSubscription[]           @relation("MealSubscriptionActivator")
+  studentDocumentsUploaded     StudentDocument[]            @relation("StudentDocumentUploader")
+  roomTransfersMade            RoomTransfer[]               @relation("RoomTransferActor")
+  residentProfile              Resident?
+  createdFeeStructures         FeeStructure[]               @relation("FeeStructureCreator")
+  feeAssignmentsMade           FeeAssignment[]              @relation("FeeAssignmentActor")
+  lateFeeSettingsMade          LateFeeSetting[]             @relation("LateFeeSettingActor")
+  lateFeesRecorded             LateFeeHistory[]             @relation("LateFeeActor")
+  studentDiscountsCreated      StudentDiscount[]            @relation("DiscountCreator")
+  studentDiscountsApproved     StudentDiscount[]            @relation("DiscountApprover")
+  securityDepositTransactions  SecurityDepositTransaction[] @relation("DepositActor")
+  notifications                Notification[]
+  notificationPreferences      NotificationPreference[]
 
   @@unique([id, tenantId])
   @@unique([tenantId, email])
   @@unique([tenantId, phone])
   @@map("users")
+}
+
+model UserMfaRecoveryCode {
+  id        String    @id @default(uuid()) @db.Uuid
+  userId    String    @map("user_id") @db.Uuid
+  tenantId  String    @map("tenant_id") @db.Uuid
+  user      User      @relation(fields: [userId, tenantId], references: [id, tenantId], onDelete: Cascade)
+  tenant    Tenant    @relation(fields: [tenantId], references: [id])
+  codeHash  String    @unique @map("code_hash")
+  usedAt    DateTime? @map("used_at")
+  createdAt DateTime  @default(now()) @map("created_at")
+
+  @@index([userId, usedAt])
+  @@map("user_mfa_recovery_codes")
 }
 
 /// Allows a user to belong to multiple tenants (❓ OD-19 — open decision)
@@ -638,10 +905,20 @@ model Resident {
   updatedAt DateTime  @updatedAt @map("updated_at")
   deletedAt DateTime? @map("deleted_at")
 
-  admissions    Admission[]
-  allocations   BedAllocation[]
-  invoices      Invoice[]
-  visitorVisits VisitorVisit[]
+  admissions        Admission[]
+  allocations       BedAllocation[]
+  invoices          Invoice[]
+  visitorVisits     VisitorVisit[]
+  attendanceRecords AttendanceRecord[]
+  leaveRequests     LeaveRequest[]
+  gatePasses        StudentGatePass[]
+  mealAttendance    MealAttendance[]
+  mealSubscriptions MealSubscription[]
+  studentDocuments  StudentDocument[]
+  roomTransfers     RoomTransfer[]
+  feeAssignments    FeeAssignment[]
+  studentDiscounts  StudentDiscount[]
+  securityDeposits  SecurityDepositTransaction[]
 
   @@unique([userId, tenantId])
   @@index([tenantId, branchId, lastName, firstName])
@@ -692,10 +969,12 @@ model BedAllocation {
   bedId       String    @map("bed_id") @db.Uuid
   bed         Bed       @relation(fields: [bedId], references: [id])
 
-  status      AllocationStatus @default(RESERVED)
-  allocatedAt DateTime         @default(now()) @map("allocated_at")
-  checkedInAt DateTime?        @map("checked_in_at")
-  endedAt     DateTime?        @map("ended_at")
+  status            AllocationStatus @default(RESERVED)
+  allocatedAt       DateTime         @default(now()) @map("allocated_at")
+  checkedInAt       DateTime?        @map("checked_in_at")
+  endedAt           DateTime?        @map("ended_at")
+  roomTransfersFrom RoomTransfer[]   @relation("RoomTransferPreviousAllocation")
+  roomTransfersTo   RoomTransfer[]   @relation("RoomTransferNewAllocation")
 
   @@index([tenantId, branchId, status])
   @@index([tenantId, residentId, status])
@@ -708,27 +987,31 @@ model BedAllocation {
 // ─────────────────────────────────────────────────────────────────────────────
 
 model Invoice {
-  id              String        @id @db.Uuid
-  tenantId        String        @map("tenant_id") @db.Uuid
-  tenant          Tenant        @relation(fields: [tenantId], references: [id])
-  branchId        String        @map("branch_id") @db.Uuid
-  branch          Branch        @relation(fields: [branchId], references: [id])
-  residentId      String        @map("resident_id") @db.Uuid
-  resident        Resident      @relation(fields: [residentId], references: [id])
-  invoiceNumber   String        @map("invoice_number")
+  id              String         @id @db.Uuid
+  tenantId        String         @map("tenant_id") @db.Uuid
+  tenant          Tenant         @relation(fields: [tenantId], references: [id])
+  branchId        String         @map("branch_id") @db.Uuid
+  branch          Branch         @relation(fields: [branchId], references: [id])
+  residentId      String         @map("resident_id") @db.Uuid
+  resident        Resident       @relation(fields: [residentId], references: [id])
+  invoiceNumber   String         @map("invoice_number")
   currency        String
-  status          InvoiceStatus @default(ISSUED)
-  issuedAt        DateTime      @default(now()) @map("issued_at")
-  dueAt           DateTime?     @map("due_at")
+  status          InvoiceStatus  @default(ISSUED)
+  issuedAt        DateTime       @default(now()) @map("issued_at")
+  dueAt           DateTime?      @map("due_at")
   notes           String?
-  createdByUserId String        @map("created_by_user_id") @db.Uuid
-  createdAt       DateTime      @default(now()) @map("created_at")
-  updatedAt       DateTime      @updatedAt @map("updated_at")
-  deletedAt       DateTime?     @map("deleted_at")
+  createdByUserId String         @map("created_by_user_id") @db.Uuid
+  feeAssignmentId String?        @unique @map("fee_assignment_id") @db.Uuid
+  feeAssignment   FeeAssignment? @relation(fields: [feeAssignmentId], references: [id])
+  createdAt       DateTime       @default(now()) @map("created_at")
+  updatedAt       DateTime       @updatedAt @map("updated_at")
+  deletedAt       DateTime?      @map("deleted_at")
 
-  lines    InvoiceLine[]
-  payments Payment[]
-  refunds  Refund[]
+  lines           InvoiceLine[]
+  payments        Payment[]
+  refunds         Refund[]
+  lateFees        LateFeeHistory[]
+  StudentDiscount StudentDiscount[]
 
   @@unique([tenantId, invoiceNumber])
   @@index([tenantId, branchId, status, issuedAt])
@@ -770,6 +1053,8 @@ model Payment {
   proofFileName    String?       @map("proof_file_name")
   proofMimeType    String?       @map("proof_mime_type")
   proofData        Bytes?        @map("proof_data")
+  proofStorageKey  String?       @map("proof_storage_key")
+  proofSha256      String?       @map("proof_sha256") @db.Char(64)
   recordedByUserId String        @map("recorded_by_user_id") @db.Uuid
   verifiedByUserId String?       @map("verified_by_user_id") @db.Uuid
   verifiedAt       DateTime?     @map("verified_at")
@@ -801,6 +1086,173 @@ model Refund {
   @@unique([tenantId, branchId, invoiceId, recordedByUserId, submissionKey], map: "uq_refunds_submission_key")
   @@index([tenantId, branchId, invoiceId, createdAt])
   @@map("refunds")
+}
+
+model FeeStructure {
+  id              String          @id @default(uuid()) @db.Uuid
+  tenantId        String          @map("tenant_id") @db.Uuid
+  tenant          Tenant          @relation(fields: [tenantId], references: [id])
+  branchId        String          @map("branch_id") @db.Uuid
+  branch          Branch          @relation(fields: [branchId], references: [id])
+  name            String
+  category        String?
+  interval        BillingInterval
+  amountMinor     Int             @map("amount_minor")
+  currency        String
+  isActive        Boolean         @default(true) @map("is_active")
+  createdByUserId String          @map("created_by_user_id") @db.Uuid
+  createdBy       User            @relation("FeeStructureCreator", fields: [createdByUserId], references: [id])
+  createdAt       DateTime        @default(now()) @map("created_at")
+  updatedAt       DateTime        @updatedAt @map("updated_at")
+  assignments     FeeAssignment[]
+
+  @@index([tenantId, branchId, isActive])
+  @@map("fee_structures")
+}
+
+model FeeAssignment {
+  id               String          @id @default(uuid()) @db.Uuid
+  tenantId         String          @map("tenant_id") @db.Uuid
+  tenant           Tenant          @relation(fields: [tenantId], references: [id])
+  branchId         String          @map("branch_id") @db.Uuid
+  branch           Branch          @relation(fields: [branchId], references: [id])
+  residentId       String          @map("resident_id") @db.Uuid
+  resident         Resident        @relation(fields: [residentId], references: [id])
+  feeStructureId   String          @map("fee_structure_id") @db.Uuid
+  feeStructure     FeeStructure    @relation(fields: [feeStructureId], references: [id])
+  amountMinor      Int             @map("amount_minor")
+  interval         BillingInterval
+  startsAt         DateTime        @map("starts_at") @db.Date
+  endsAt           DateTime?       @map("ends_at") @db.Date
+  assignedByUserId String          @map("assigned_by_user_id") @db.Uuid
+  assignedBy       User            @relation("FeeAssignmentActor", fields: [assignedByUserId], references: [id])
+  createdAt        DateTime        @default(now()) @map("created_at")
+  Invoice          Invoice?
+
+  @@index([tenantId, branchId, residentId, startsAt])
+  @@map("fee_assignments")
+}
+
+model LateFeeSetting {
+  id              String      @id @default(uuid()) @db.Uuid
+  tenantId        String      @map("tenant_id") @db.Uuid
+  tenant          Tenant      @relation(fields: [tenantId], references: [id])
+  branchId        String      @map("branch_id") @db.Uuid
+  branch          Branch      @relation(fields: [branchId], references: [id])
+  daysAfterDue    Int         @map("days_after_due")
+  feeType         LateFeeType @map("fee_type")
+  amount          Int         @map("amount")
+  isActive        Boolean     @default(true) @map("is_active")
+  createdByUserId String      @map("created_by_user_id") @db.Uuid
+  createdBy       User        @relation("LateFeeSettingActor", fields: [createdByUserId], references: [id])
+  createdAt       DateTime    @default(now()) @map("created_at")
+  updatedAt       DateTime    @updatedAt @map("updated_at")
+
+  @@index([tenantId, branchId, isActive])
+  @@map("late_fee_settings")
+}
+
+model LateFeeHistory {
+  id               String   @id @default(uuid()) @db.Uuid
+  tenantId         String   @map("tenant_id") @db.Uuid
+  tenant           Tenant   @relation(fields: [tenantId], references: [id])
+  branchId         String   @map("branch_id") @db.Uuid
+  branch           Branch   @relation(fields: [branchId], references: [id])
+  invoiceId        String   @map("invoice_id") @db.Uuid
+  invoice          Invoice  @relation(fields: [invoiceId], references: [id])
+  settingId        String   @map("setting_id") @db.Uuid
+  amountMinor      Int      @map("amount_minor")
+  appliedAt        DateTime @default(now()) @map("applied_at")
+  recordedByUserId String   @map("recorded_by_user_id") @db.Uuid
+  recordedBy       User     @relation("LateFeeActor", fields: [recordedByUserId], references: [id])
+
+  @@unique([tenantId, branchId, invoiceId, settingId])
+  @@index([tenantId, branchId, invoiceId])
+  @@map("late_fee_history")
+}
+
+model StudentDiscount {
+  id               String       @id @default(uuid()) @db.Uuid
+  tenantId         String       @map("tenant_id") @db.Uuid
+  tenant           Tenant       @relation(fields: [tenantId], references: [id])
+  branchId         String       @map("branch_id") @db.Uuid
+  branch           Branch       @relation(fields: [branchId], references: [id])
+  residentId       String       @map("resident_id") @db.Uuid
+  resident         Resident     @relation(fields: [residentId], references: [id])
+  type             DiscountType
+  value            Int          @map("value")
+  reason           String
+  startsAt         DateTime     @map("starts_at") @db.Date
+  endsAt           DateTime?    @map("ends_at") @db.Date
+  approvedAt       DateTime?    @map("approved_at")
+  approvedByUserId String?      @map("approved_by_user_id") @db.Uuid
+  approvedBy       User?        @relation("DiscountApprover", fields: [approvedByUserId], references: [id])
+  createdByUserId  String       @map("created_by_user_id") @db.Uuid
+  createdBy        User         @relation("DiscountCreator", fields: [createdByUserId], references: [id])
+  createdAt        DateTime     @default(now()) @map("created_at")
+  invoice          Invoice?     @relation(fields: [invoiceId], references: [id])
+  invoiceId        String?      @db.Uuid
+
+  @@index([tenantId, branchId, residentId, startsAt])
+  @@map("student_discounts")
+}
+
+model SecurityDepositTransaction {
+  id               String                 @id @default(uuid()) @db.Uuid
+  tenantId         String                 @map("tenant_id") @db.Uuid
+  tenant           Tenant                 @relation(fields: [tenantId], references: [id])
+  branchId         String                 @map("branch_id") @db.Uuid
+  branch           Branch                 @relation(fields: [branchId], references: [id])
+  residentId       String                 @map("resident_id") @db.Uuid
+  resident         Resident               @relation(fields: [residentId], references: [id])
+  type             DepositTransactionType
+  amountMinor      Int                    @map("amount_minor")
+  reference        String?
+  notes            String?
+  submissionKey    String                 @map("submission_key") @db.Uuid
+  recordedByUserId String                 @map("recorded_by_user_id") @db.Uuid
+  recordedBy       User                   @relation("DepositActor", fields: [recordedByUserId], references: [id])
+  createdAt        DateTime               @default(now()) @map("created_at")
+
+  @@unique([tenantId, branchId, residentId, submissionKey])
+  @@index([tenantId, branchId, residentId, createdAt])
+  @@map("security_deposit_transactions")
+}
+
+model Notification {
+  id               String    @id @default(uuid()) @db.Uuid
+  tenantId         String    @map("tenant_id") @db.Uuid
+  tenant           Tenant    @relation(fields: [tenantId], references: [id])
+  branchId         String?   @map("branch_id") @db.Uuid
+  branch           Branch?   @relation(fields: [branchId], references: [id])
+  userId           String    @map("user_id") @db.Uuid
+  user             User      @relation(fields: [userId], references: [id])
+  title            String
+  body             String
+  category         String
+  deduplicationKey String?   @map("deduplication_key")
+  readAt           DateTime? @map("read_at")
+  createdAt        DateTime  @default(now()) @map("created_at")
+
+  @@unique([tenantId, deduplicationKey])
+  @@index([tenantId, userId, readAt, createdAt])
+  @@map("notifications")
+}
+
+model NotificationPreference {
+  id        String   @id @default(uuid()) @db.Uuid
+  tenantId  String   @map("tenant_id") @db.Uuid
+  tenant    Tenant   @relation(fields: [tenantId], references: [id])
+  userId    String   @map("user_id") @db.Uuid
+  user      User     @relation(fields: [userId], references: [id])
+  category  String
+  inApp     Boolean  @default(true) @map("in_app")
+  email     Boolean  @default(true)
+  sms       Boolean  @default(false)
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  @@unique([tenantId, userId, category])
+  @@map("notification_preferences")
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -928,4 +1380,194 @@ model VisitorVisit {
   @@index([tenantId, hostResidentId, createdAt])
   @@index([tenantId, branchId, deletedAt])
   @@map("visitor_visits")
+}
+
+model AttendanceRecord {
+  id             String                  @id @default(uuid()) @db.Uuid
+  tenantId       String                  @map("tenant_id") @db.Uuid
+  tenant         Tenant                  @relation(fields: [tenantId], references: [id])
+  branchId       String                  @map("branch_id") @db.Uuid
+  branch         Branch                  @relation(fields: [branchId], references: [id])
+  residentId     String                  @map("resident_id") @db.Uuid
+  resident       Resident                @relation(fields: [residentId], references: [id])
+  attendanceDate DateTime                @map("attendance_date") @db.Date
+  status         StudentAttendanceStatus
+  markedByUserId String                  @map("marked_by_user_id") @db.Uuid
+  markedBy       User                    @relation("AttendanceMarker", fields: [markedByUserId], references: [id])
+  notes          String?
+  createdAt      DateTime                @default(now()) @map("created_at")
+  updatedAt      DateTime                @updatedAt @map("updated_at")
+
+  @@unique([tenantId, branchId, residentId, attendanceDate])
+  @@index([tenantId, branchId, attendanceDate, status])
+  @@index([tenantId, residentId, attendanceDate])
+  @@map("attendance_records")
+}
+
+model LeaveRequest {
+  id               String             @id @default(uuid()) @db.Uuid
+  tenantId         String             @map("tenant_id") @db.Uuid
+  tenant           Tenant             @relation(fields: [tenantId], references: [id])
+  branchId         String             @map("branch_id") @db.Uuid
+  branch           Branch             @relation(fields: [branchId], references: [id])
+  residentId       String             @map("resident_id") @db.Uuid
+  resident         Resident           @relation(fields: [residentId], references: [id])
+  startDate        DateTime           @map("start_date") @db.Date
+  endDate          DateTime           @map("end_date") @db.Date
+  reason           String
+  status           LeaveRequestStatus @default(PENDING)
+  decisionByUserId String?            @map("decision_by_user_id") @db.Uuid
+  decisionBy       User?              @relation("LeaveDecisionActor", fields: [decisionByUserId], references: [id])
+  decisionAt       DateTime?          @map("decision_at")
+  decisionNote     String?            @map("decision_note")
+  createdAt        DateTime           @default(now()) @map("created_at")
+  updatedAt        DateTime           @updatedAt @map("updated_at")
+
+  @@index([tenantId, branchId, status, startDate])
+  @@index([tenantId, residentId, createdAt])
+  @@map("leave_requests")
+}
+
+model StudentGatePass {
+  id                     String                @id @default(uuid()) @db.Uuid
+  tenantId               String                @map("tenant_id") @db.Uuid
+  tenant                 Tenant                @relation(fields: [tenantId], references: [id])
+  branchId               String                @map("branch_id") @db.Uuid
+  branch                 Branch                @relation(fields: [branchId], references: [id])
+  residentId             String                @map("resident_id") @db.Uuid
+  resident               Resident              @relation(fields: [residentId], references: [id])
+  exitAt                 DateTime              @map("exit_at")
+  expectedReturnAt       DateTime              @map("expected_return_at")
+  actualReturnAt         DateTime?             @map("actual_return_at")
+  reason                 String
+  status                 StudentGatePassStatus @default(PENDING)
+  decisionByUserId       String?               @map("decision_by_user_id") @db.Uuid
+  decisionBy             User?                 @relation("GatePassDecisionActor", fields: [decisionByUserId], references: [id])
+  decisionAt             DateTime?             @map("decision_at")
+  rejectionReason        String?               @map("rejection_reason")
+  returnRecordedByUserId String?               @map("return_recorded_by_user_id") @db.Uuid
+  returnRecordedBy       User?                 @relation("GatePassReturnActor", fields: [returnRecordedByUserId], references: [id])
+  createdAt              DateTime              @default(now()) @map("created_at")
+  updatedAt              DateTime              @updatedAt @map("updated_at")
+
+  @@index([tenantId, branchId, status, exitAt])
+  @@index([tenantId, residentId, createdAt])
+  @@map("student_gate_passes")
+}
+
+model MealAttendance {
+  id             String               @id @default(uuid()) @db.Uuid
+  tenantId       String               @map("tenant_id") @db.Uuid
+  tenant         Tenant               @relation(fields: [tenantId], references: [id])
+  branchId       String               @map("branch_id") @db.Uuid
+  branch         Branch               @relation(fields: [branchId], references: [id])
+  residentId     String               @map("resident_id") @db.Uuid
+  resident       Resident             @relation(fields: [residentId], references: [id])
+  mealDate       DateTime             @map("meal_date") @db.Date
+  meal           MessMealType
+  status         MealAttendanceStatus
+  markedByUserId String               @map("marked_by_user_id") @db.Uuid
+  markedBy       User                 @relation("MealAttendanceMarker", fields: [markedByUserId], references: [id])
+  createdAt      DateTime             @default(now()) @map("created_at")
+  updatedAt      DateTime             @updatedAt @map("updated_at")
+
+  @@unique([tenantId, branchId, residentId, mealDate, meal])
+  @@index([tenantId, branchId, mealDate, meal, status])
+  @@index([tenantId, residentId, mealDate])
+  @@map("meal_attendance")
+}
+
+model MealSubscriptionPlan {
+  id                 String         @id @default(uuid()) @db.Uuid
+  tenantId           String         @map("tenant_id") @db.Uuid
+  tenant             Tenant         @relation(fields: [tenantId], references: [id])
+  branchId           String         @map("branch_id") @db.Uuid
+  branch             Branch         @relation(fields: [branchId], references: [id])
+  name               String
+  monthlyAmountMinor Int            @map("monthly_amount_minor")
+  mealTypes          MessMealType[] @map("meal_types")
+  isActive           Boolean        @default(true) @map("is_active")
+  createdByUserId    String         @map("created_by_user_id") @db.Uuid
+  createdBy          User           @relation("MealSubscriptionPlanCreator", fields: [createdByUserId], references: [id])
+  createdAt          DateTime       @default(now()) @map("created_at")
+  updatedAt          DateTime       @updatedAt @map("updated_at")
+
+  subscriptions MealSubscription[]
+
+  @@index([tenantId, branchId, isActive])
+  @@map("meal_subscription_plans")
+}
+
+model MealSubscription {
+  id                String                 @id @default(uuid()) @db.Uuid
+  tenantId          String                 @map("tenant_id") @db.Uuid
+  tenant            Tenant                 @relation(fields: [tenantId], references: [id])
+  branchId          String                 @map("branch_id") @db.Uuid
+  branch            Branch                 @relation(fields: [branchId], references: [id])
+  residentId        String                 @map("resident_id") @db.Uuid
+  resident          Resident               @relation(fields: [residentId], references: [id])
+  planId            String                 @map("plan_id") @db.Uuid
+  plan              MealSubscriptionPlan   @relation(fields: [planId], references: [id])
+  startsOn          DateTime               @map("starts_on") @db.Date
+  endsOn            DateTime               @map("ends_on") @db.Date
+  status            MealSubscriptionStatus @default(ACTIVE)
+  activatedByUserId String                 @map("activated_by_user_id") @db.Uuid
+  activatedBy       User                   @relation("MealSubscriptionActivator", fields: [activatedByUserId], references: [id])
+  deactivatedAt     DateTime?              @map("deactivated_at")
+  createdAt         DateTime               @default(now()) @map("created_at")
+  updatedAt         DateTime               @updatedAt @map("updated_at")
+
+  @@index([tenantId, branchId, status, startsOn, endsOn])
+  @@index([tenantId, residentId, startsOn])
+  @@map("meal_subscriptions")
+}
+
+model StudentDocument {
+  id               String                  @id @default(uuid()) @db.Uuid
+  tenantId         String                  @map("tenant_id") @db.Uuid
+  tenant           Tenant                  @relation(fields: [tenantId], references: [id])
+  branchId         String                  @map("branch_id") @db.Uuid
+  branch           Branch                  @relation(fields: [branchId], references: [id])
+  residentId       String                  @map("resident_id") @db.Uuid
+  resident         Resident                @relation(fields: [residentId], references: [id])
+  category         StudentDocumentCategory
+  originalName     String                  @map("original_name")
+  mimeType         String                  @map("mime_type")
+  fileData         Bytes                   @map("file_data")
+  uploadedByUserId String                  @map("uploaded_by_user_id") @db.Uuid
+  uploadedBy       User                    @relation("StudentDocumentUploader", fields: [uploadedByUserId], references: [id])
+  createdAt        DateTime                @default(now()) @map("created_at")
+  updatedAt        DateTime                @updatedAt @map("updated_at")
+
+  @@index([tenantId, branchId, residentId, category])
+  @@map("student_documents")
+}
+
+model RoomTransfer {
+  id                   String        @id @default(uuid()) @db.Uuid
+  tenantId             String        @map("tenant_id") @db.Uuid
+  tenant               Tenant        @relation(fields: [tenantId], references: [id])
+  branchId             String        @map("branch_id") @db.Uuid
+  branch               Branch        @relation(fields: [branchId], references: [id])
+  residentId           String        @map("resident_id") @db.Uuid
+  resident             Resident      @relation(fields: [residentId], references: [id])
+  fromBedId            String        @map("from_bed_id") @db.Uuid
+  fromBed              Bed           @relation("RoomTransferFromBed", fields: [fromBedId], references: [id])
+  fromRoomCode         String        @map("from_room_code")
+  fromBedCode          String        @map("from_bed_code")
+  toBedId              String        @map("to_bed_id") @db.Uuid
+  toBed                Bed           @relation("RoomTransferToBed", fields: [toBedId], references: [id])
+  toRoomCode           String        @map("to_room_code")
+  toBedCode            String        @map("to_bed_code")
+  previousAllocationId String        @map("previous_allocation_id") @db.Uuid
+  previousAllocation   BedAllocation @relation("RoomTransferPreviousAllocation", fields: [previousAllocationId], references: [id])
+  newAllocationId      String        @map("new_allocation_id") @db.Uuid
+  newAllocation        BedAllocation @relation("RoomTransferNewAllocation", fields: [newAllocationId], references: [id])
+  reason               String
+  transferredByUserId  String        @map("transferred_by_user_id") @db.Uuid
+  transferredBy        User          @relation("RoomTransferActor", fields: [transferredByUserId], references: [id])
+  transferredAt        DateTime      @default(now()) @map("transferred_at")
+
+  @@index([tenantId, branchId, residentId, transferredAt])
+  @@map("room_transfers")
 }

@@ -20,6 +20,7 @@
 | CODE-11 | Phase 7 (hardening readiness) | **Verified — local code checks only** | Local unit/integration tests, typechecks, lint, Prisma validation, production builds, and isolated synthetic PostgreSQL restore passed. Prior local benchmark evidence is historical and was not repeated. No production-like certification, 300-CCU test, or real HMS application-data restore is claimed. |
 | CODE-12 | Phase 8 (pilot) | **Deferred by scope** | User selected local-only work. Production rollout, 300-CCU verification, RPO 15-minute/RTO 4-hour recovery certification, and operational acceptance were not run. |
 | CODE-13 | Platform administrator | **MFA enrollment pending** | Prior project notes record the admin account as active and first-login MFA enrollment required. No authenticated browser session or live account access was used in this local-only task. |
+| CODE-14 | Phase 5 scalability and refactoring | **Implemented locally; deployment/backfill pending** | Tenant-scoped PDF/proof operations, private S3 proof storage, an additive migration/backfill, per-process DB connection limits, queue retries, and shared connectivity hook are in source. No tests or performance certification were run. |
 
 ## Historical remaining-task execution (2026-10-27)
 
@@ -49,6 +50,8 @@ Latest local validation: backend 20 suites / 154 unit tests passed; backend type
 | BLK-DEPLOY | MFA enrollment and authenticated acceptance are pending; historical notes conflict on bootstrap status | CODE-13; Task 4 authenticated Super Admin acceptance |
 | BLK-OPS | Backup retention deferred by owner; schedule/encryption policy unresolved; worker has no processors | Additional risks, production readiness |
 | BLK-SCOPE | User approved bounded local CRUD; biometrics are excluded, visitor hours and retention are deferred, and physical record deletion remains disabled | G-08/G-21 and policy-dependent cleanup |
+| BLK-PROOF-STORAGE | Additive object-storage migration and legacy-proof backfill are not applied; production private bucket, credentials, and retention/backup policy must be configured | Payment-proof rollout and removal of legacy database bytes |
+| BLK-SCALE | 200+ tenants, 100,000 residents, 300 concurrent users, 100 RPS, p95 500 ms, RPO 15 minutes, and RTO 4 hours are not certified | Production capacity and recovery readiness |
 | BLK-01 | PRD/SRS V2 was previously noted as uploaded, but source files are absent from this workspace | G-10 source reconciliation |
 | BLK-02 | Developer Handover v2 | Every ✅ tag |
 | BASE-01 | Baseline values | ✅ Confirmed by SRS V2: 200 tenants, 100k residents, 300 CCU, 100 rps, p95 ≤ 500ms, RPO 15min, RTO 4h, PKR, Asia/Karachi |

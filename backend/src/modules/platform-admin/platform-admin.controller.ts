@@ -31,6 +31,15 @@ import {
   UpdateTenantUserDto,
 } from './platform-admin.dto';
 import { PlatformMfaEnrollmentDto } from './platform-auth.dto';
+import { SaasService } from './saas.service';
+import {
+  AssignSubscriptionDto,
+  ChangeSubscriptionStatusDto,
+  RecordPlatformPaymentDto,
+  SubscriptionQueryDto,
+  UpdateTrialSettingsDto,
+  UpsertSubscriptionPlanDto,
+} from './saas.dto';
 
 interface PlatformRequest extends Request {
   platformAdminId?: string;
@@ -43,6 +52,7 @@ export class PlatformAdminController {
   constructor(
     private readonly auth: PlatformAuthService,
     private readonly platform: PlatformAdminService,
+    private readonly saas: SaasService,
   ) {}
 
   @Post('auth/login')
@@ -154,6 +164,102 @@ export class PlatformAdminController {
     @Body() dto: UpdateTenantUserDto,
   ) {
     return this.platform.updateTenantUser(this.adminId(request), tenantId, userId, dto);
+  }
+
+  @Get('plans')
+  @UseGuards(PlatformAdminGuard)
+  @ApiBearerAuth()
+  listPlans(@Req() request: PlatformRequest) {
+    return this.saas.listPlans(this.adminId(request));
+  }
+
+  @Post('plans')
+  @UseGuards(PlatformAdminGuard)
+  @ApiBearerAuth()
+  createPlan(@Req() request: PlatformRequest, @Body() dto: UpsertSubscriptionPlanDto) {
+    return this.saas.savePlan(this.adminId(request), dto);
+  }
+
+  @Patch('plans/:planId')
+  @UseGuards(PlatformAdminGuard)
+  @ApiBearerAuth()
+  updatePlan(
+    @Req() request: PlatformRequest,
+    @Param('planId', ParseUUIDPipe) planId: string,
+    @Body() dto: UpsertSubscriptionPlanDto,
+  ) {
+    return this.saas.savePlan(this.adminId(request), dto, planId);
+  }
+
+  @Get('trial-settings')
+  @UseGuards(PlatformAdminGuard)
+  @ApiBearerAuth()
+  getTrialSettings(@Req() request: PlatformRequest) {
+    return this.saas.getTrialSettings(this.adminId(request));
+  }
+
+  @Patch('trial-settings')
+  @UseGuards(PlatformAdminGuard)
+  @ApiBearerAuth()
+  updateTrialSettings(@Req() request: PlatformRequest, @Body() dto: UpdateTrialSettingsDto) {
+    return this.saas.updateTrialSettings(this.adminId(request), dto);
+  }
+
+  @Get('tenants/:tenantId/subscription')
+  @UseGuards(PlatformAdminGuard)
+  @ApiBearerAuth()
+  getTenantSubscription(
+    @Req() request: PlatformRequest,
+    @Param('tenantId', ParseUUIDPipe) tenantId: string,
+  ) {
+    return this.saas.getTenantSubscription(this.adminId(request), tenantId);
+  }
+
+  @Post('tenants/:tenantId/subscription')
+  @UseGuards(PlatformAdminGuard)
+  @ApiBearerAuth()
+  assignSubscription(
+    @Req() request: PlatformRequest,
+    @Param('tenantId', ParseUUIDPipe) tenantId: string,
+    @Body() dto: AssignSubscriptionDto,
+  ) {
+    return this.saas.assignSubscription(this.adminId(request), tenantId, dto);
+  }
+
+  @Patch('tenants/:tenantId/subscription/status')
+  @UseGuards(PlatformAdminGuard)
+  @ApiBearerAuth()
+  changeSubscriptionStatus(
+    @Req() request: PlatformRequest,
+    @Param('tenantId', ParseUUIDPipe) tenantId: string,
+    @Body() dto: ChangeSubscriptionStatusDto,
+  ) {
+    return this.saas.changeSubscriptionStatus(this.adminId(request), tenantId, dto.status);
+  }
+
+  @Get('invoices')
+  @UseGuards(PlatformAdminGuard)
+  @ApiBearerAuth()
+  listSubscriptionInvoices(@Req() request: PlatformRequest, @Query() filter: SubscriptionQueryDto) {
+    return this.saas.listInvoices(this.adminId(request), filter);
+  }
+
+  @Post('invoices/:invoiceId/payments')
+  @UseGuards(PlatformAdminGuard)
+  @ApiBearerAuth()
+  recordSubscriptionPayment(
+    @Req() request: PlatformRequest,
+    @Param('invoiceId', ParseUUIDPipe) invoiceId: string,
+    @Body() dto: RecordPlatformPaymentDto,
+  ) {
+    return this.saas.recordPayment(this.adminId(request), invoiceId, dto);
+  }
+
+  @Get('reports/subscriptions')
+  @UseGuards(PlatformAdminGuard)
+  @ApiBearerAuth()
+  subscriptionReport(@Req() request: PlatformRequest) {
+    return this.saas.report(this.adminId(request));
   }
 
   @Get('audit')

@@ -2,6 +2,15 @@
 
 Execution is sequential. No database reset or destructive migration command is used.
 
+## Addendum — 2026-11-10 (performance and object storage)
+
+- Added a private S3-compatible payment-proof provider, checksum persistence/verification, and permission-checked API streaming. New uploads no longer put proof bytes in PostgreSQL.
+- Added `20261112000000_payment_proof_object_storage` as an additive migration. It preserves legacy `proof_data`; `backend/scripts/migrate-payment-proofs.ts` uploads legacy records and persists SHA-256 integrity hashes through a migration-only RLS-bypass connection before clearing each row's bytea data. Neither migration nor backfill was run.
+- PDF creation and proof storage I/O now occur outside request-scoped tenant transactions. DB reads/writes use explicit short tenant contexts; the invoice lock remains around the payment-balance check and creation.
+- Wired `DATABASE_POOL_MAX` to Prisma's `connection_limit`, configured local object-storage settings, retries for queued jobs, and a shared portal connectivity hook. Extracted the student fees/payment panel and its shared finance types/formatting from the main portal component.
+- Moved gate visitor operations under the `visitors` domain module and retained compatibility exports for existing phase-based import paths.
+- No tests were run. Do not claim production-scale performance, RPO/RTO, or throughput verification; remaining historical phase-named backend modules need later behavior-preserving domain decomposition.
+
 ## Addendum — 2026-11-02 (local-only follow-up)
 
 This update supersedes the earlier scope note that admission/inventory/complaint/visitor CRUD was unapproved. The user approved pending-only admission edit/cancel, dependency-checked inventory updates and soft archive, resolved/closed complaint archive, rejected/checked-out visitor archive, and a complaint-only offline outbox. Biometrics remain excluded; visitor hours and retention/backup policies remain deferred.

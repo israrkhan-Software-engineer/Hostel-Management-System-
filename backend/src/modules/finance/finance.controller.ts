@@ -16,6 +16,7 @@ import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import { BranchScoped } from '../../common/decorators/branch-scoped.decorator';
 import { CurrentUser, RequestUser } from '../../common/decorators/current-user.decorator';
 import { RequirePermission } from '../../common/decorators/require-permission.decorator';
+import { SkipTenantTransaction } from '../../common/decorators/skip-tenant-transaction.decorator';
 import {
   CreateInvoiceDto,
   FinanceReportFilterDto,
@@ -66,6 +67,7 @@ export class FinanceController {
 
   @Post('resident/invoices/:invoiceId/payments')
   @RequirePermission('payments', 'create')
+  @SkipTenantTransaction()
   @UseInterceptors(FileInterceptor('proof', { limits: { fileSize: 5 * 1024 * 1024, files: 1 } }))
   submitResidentPayment(
     @Param('branchId', ParseUUIDPipe) branchId: string,
@@ -86,6 +88,7 @@ export class FinanceController {
 
   @Get('resident/payments/:paymentId/proof')
   @RequirePermission('payment_proofs', 'view')
+  @SkipTenantTransaction()
   async downloadResidentPaymentProof(
     @Param('branchId', ParseUUIDPipe) branchId: string,
     @Param('paymentId', ParseUUIDPipe) paymentId: string,
@@ -122,6 +125,7 @@ export class FinanceController {
 
   @Get('invoices/:invoiceId/pdf')
   @RequirePermission('invoices', 'view')
+  @SkipTenantTransaction()
   async downloadInvoicePdf(
     @Param('branchId', ParseUUIDPipe) branchId: string,
     @Param('invoiceId', ParseUUIDPipe) invoiceId: string,
@@ -169,6 +173,7 @@ export class FinanceController {
 
   @Get('payments/:paymentId/proof')
   @RequirePermission('payment_proofs', 'view')
+  @SkipTenantTransaction()
   async downloadPaymentProof(
     @Param('branchId', ParseUUIDPipe) branchId: string,
     @Param('paymentId', ParseUUIDPipe) paymentId: string,

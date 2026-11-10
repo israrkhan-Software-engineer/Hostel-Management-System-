@@ -3,7 +3,7 @@ import { ConfigService } from '@nestjs/config';
 import { JwtService } from '@nestjs/jwt';
 import { PrismaService } from '../../common/prisma/prisma.service';
 import { decryptField, encryptField } from '../../common/utils/field-encryption.util';
-import { verifyPassword } from '../../common/utils/password.util';
+import { verifyPassword, hashPassword, needsPasswordRehash } from '../../common/utils/password.util';
 import { PlatformLoginDto, PlatformMfaEnrollmentDto } from './platform-auth.dto';
 import {
   authenticatorUri,
@@ -13,7 +13,7 @@ import {
   verifyTotp,
 } from './platform-mfa.util';
 
-const DUMMY_PASSWORD_HASH = 'pbkdf2:100000:00000000000000000000000000000000:' + '0'.repeat(128);
+const DUMMY_PASSWORD_HASH = hashPassword('HMS invalid-account timing equalization');
 
 @Injectable()
 export class PlatformAuthService {
@@ -33,9 +33,19 @@ export class PlatformAuthService {
     const email = dto.email.trim().toLowerCase();
     return this.prisma.runWithPlatformLoginContext(email, async () => {
       const admin = await this.prisma.platformAdmin.findUnique({ where: { email } });
-      const passwordValid = await verifyPassword(dto.password, admin?.passwordHash ?? DUMMY_PASSWORD_HASH);
+      const passwordValid = await verifyPassword(
+        dto.password,
+        admin?.passwordHash ?? await DUMMY_PASSWORD_HASH,
+      );
       if (!admin || admin.status !== 'ACTIVE' || !passwordValid) {
         throw new UnauthorizedException('Invalid platform credentials');
+      }
+      if (needsPasswordRehash(admin.passwordHash)) {
+        const passwordHash = await hashPassword(dto.password);
+        await this.prisma.runWithPlatformContext(admin.id, () => this.prisma.platformAdmin.update({
+          where: { id: admin.id },
+          data: { passwordHash },
+        }));
       }
 
       if (!admin.mfaSecretEncrypted) {

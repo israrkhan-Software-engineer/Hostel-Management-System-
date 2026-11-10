@@ -1,8 +1,15 @@
 'use client';
 
 import { FormEvent, useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { apiDownload, apiRequest, setAccessToken } from '@/lib/api/client';
+import { useOnlineStatus } from '@/lib/hooks/use-online-status';
+import AccountSecurityPanel from './account-security-panel';
+import HostelServicesPanel from './hostel-services-panel';
+import NotificationCenter from './notification-center';
+import FinanceManagementPanel from './finance-management-panel';
+import TenantManagementPanel from './tenant-management-panel';
 import { getFinanceSubmissionKey, resetFormOnSuccess } from '@/lib/finance/submission';
 import {
   dashboardCacheKey,
@@ -12,7 +19,14 @@ import {
 } from '@/lib/offline/dashboard-cache';
 
 type Branch = { id: string; name: string; code: string };
-type Profile = { id: string; email: string | null; phone: string | null; roles: string[]; permissions: string[] };
+type Profile = {
+  id: string;
+  email: string | null;
+  phone: string | null;
+  roles: string[];
+  permissions: string[];
+  mfaEnabled: boolean;
+};
 type Resident = {
   id: string;
   firstName: string;
@@ -149,7 +163,7 @@ type VisitorVisit = {
   checkedOutAt: string | null;
   createdAt: string;
 };
-type Section = 'admissions' | 'residents' | 'inventory' | 'finance' | 'mess' | 'complaints' | 'notices' | 'visitors' | 'offline';
+type Section = 'admissions' | 'residents' | 'inventory' | 'finance' | 'mess' | 'complaints' | 'notices' | 'visitors' | 'services' | 'people' | 'offline';
 
 const emptyResident = { firstName: '', lastName: '', phone: '', email: '', dateOfBirth: '', cnic: '' };
 const emptyInvoiceLine = { description: '', quantity: '1', amount: '' };
@@ -191,6 +205,7 @@ export default function Phase2Workspace() {
   const [profile, setProfile] = useState<Profile | null>(null);
   const [branches, setBranches] = useState<Branch[]>([]);
   const [branchId, setBranchId] = useState('');
+  const [branchForm, setBranchForm] = useState({ name: '', code: '' });
   const [section, setSection] = useState<Section>('admissions');
   const [menuWeek, setMenuWeek] = useState(dateInput(mondayOf(today)));
   const [menuEntries, setMenuEntries] = useState<Record<string, string>>({});
@@ -232,7 +247,7 @@ export default function Phase2Workspace() {
   });
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
-  const [isOnline, setIsOnline] = useState(true);
+  const isOnline = useOnlineStatus();
   const [message, setMessage] = useState('');
   const [error, setError] = useState('');
   const financeSubmissionKeys = useRef(new Map<string, { signature: string; key: string }>());
@@ -251,6 +266,12 @@ export default function Phase2Workspace() {
     ...(permissions.has('complaints:view') || permissions.has('complaints:create') ? ['complaints' as const] : []),
     ...(permissions.has('notices:view') ? ['notices' as const] : []),
     ...(permissions.has('visitors:view') || permissions.has('visitors:create') ? ['visitors' as const] : []),
+    ...(permissions.has('users:view') && permissions.has('roles:view') ? ['people' as const] : []),
+    ...([
+      'attendance:view', 'leave_requests:view', 'leave_requests:create', 'gate_passes:view',
+      'gate_passes:create', 'meal_attendance:view', 'meal_subscriptions:view',
+      'student_documents:view', 'student_documents:create', 'allocations:view', 'exports:export',
+    ].some((permission) => permissions.has(permission)) ? ['services' as const] : []),
     'offline' as const,
   ], [permissions]);
   const visibleSections = useMemo<Section[]>(
@@ -258,22 +279,29 @@ export default function Phase2Workspace() {
     [availableSections, isOnline],
   );
 
+  async function createBranch(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    setError('');
+    setMessage('');
+    const response = await apiRequest<Branch>('/branches', {
+      method: 'POST',
+      body: JSON.stringify({ name: branchForm.name.trim(), code: branchForm.code.trim().toUpperCase() }),
+    });
+    if (!response.ok) {
+      setError(response.message);
+      return;
+    }
+    setBranches((current) => [...current, response.data]);
+    setBranchId(response.data.id);
+    setBranchForm({ name: '', code: '' });
+    setMessage('Branch created.');
+  }
+
   useEffect(() => {
     if (visibleSections.length && !visibleSections.includes(section)) {
       setSection(isOnline ? visibleSections[0] : 'offline');
     }
   }, [isOnline, visibleSections, section]);
-
-  useEffect(() => {
-    const updateConnectivity = () => setIsOnline(navigator.onLine);
-    updateConnectivity();
-    window.addEventListener('online', updateConnectivity);
-    window.addEventListener('offline', updateConnectivity);
-    return () => {
-      window.removeEventListener('online', updateConnectivity);
-      window.removeEventListener('offline', updateConnectivity);
-    };
-  }, []);
 
   useEffect(() => {
     if (isOnline) return;
@@ -321,9 +349,22 @@ export default function Phase2Workspace() {
         return;
       }
       setProfile(current.data);
+      if (!current.data.permissions.includes('branches:view')) {
+        setBranches([]);
+        setLoading(false);
+        return;
+      }
       const branchList = await apiRequest<Branch[]>('/branches');
       if (!active) return;
       if (!branchList.ok) {
+        if (
+          current.data.permissions.includes('users:view')
+          && current.data.permissions.includes('roles:view')
+        ) {
+          setBranches([]);
+          setLoading(false);
+          return;
+        }
         setError(branchList.message);
         setLoading(false);
         return;
@@ -1074,9 +1115,10 @@ export default function Phase2Workspace() {
   return (
     <main className="workspace-page">
       <header className="workspace-header">
-        <a className="brand-lockup" href="/">HMS <span>Operations</span></a>
+        <Link className="brand-lockup" href="/">HMS <span>Operations</span></Link>
         <div className="workspace-user">
           {isOnline && <span>{profile.email || profile.phone || profile.roles.join(', ')}</span>}
+          {isOnline && <NotificationCenter />}
           <button className="button secondary" type="button" onClick={() => void signOut()}>Sign out</button>
         </div>
       </header>
@@ -1095,10 +1137,33 @@ export default function Phase2Workspace() {
               </select>
             </label>
           )}
+          {can('branches', 'create') && (
+            <form className="branch-create-form" onSubmit={(event) => void createBranch(event)}>
+              <label>New branch name
+                <input required minLength={2} maxLength={120} value={branchForm.name}
+                  onChange={(event) => setBranchForm({ ...branchForm, name: event.target.value })} />
+              </label>
+              <label>Code
+                <input required minLength={2} maxLength={30} pattern="[A-Za-z0-9_-]+"
+                  value={branchForm.code} onChange={(event) => setBranchForm({ ...branchForm, code: event.target.value })} />
+              </label>
+              <button className="button secondary small" type="submit">Add branch</button>
+            </form>
+          )}
         </div>
 
-        {!branches.length ? (
-          <section className="panel"><h2>No branch access</h2><p>Your account does not have an active branch assigned. Ask an administrator to grant branch access.</p></section>
+        <AccountSecurityPanel
+          mfaEnabled={profile.mfaEnabled}
+          onMfaEnabled={() => setProfile((current) => current ? { ...current, mfaEnabled: true } : current)}
+        />
+
+        {!branches.length && !visibleSections.includes('people') ? (
+          <section className="panel">
+            {error && <div className="notice error" role="alert">{error}</div>}
+            {message && <div className="notice success" role="status">{message}</div>}
+            <h2>No branch access</h2>
+            <p>Your account does not have an active branch assigned. Ask an administrator to grant branch access.</p>
+          </section>
         ) : (
           <>
             <nav className="workspace-tabs" aria-label="Hostel management">
@@ -1111,6 +1176,16 @@ export default function Phase2Workspace() {
             {error && <div className="notice error" role="alert">{error}</div>}
             {message && <div className="notice success" role="status">{message}</div>}
             {loading && <p className="muted">Refreshing branch data…</p>}
+
+            {section === 'services' && (
+              <HostelServicesPanel
+                mode="staff"
+                branchId={branchId}
+                permissions={profile.permissions}
+              />
+            )}
+
+            {section === 'people' && <TenantManagementPanel permissions={profile?.permissions ?? []} />}
 
             {section === 'admissions' && (
               <div className="content-grid">
@@ -1473,6 +1548,9 @@ export default function Phase2Workspace() {
                   )}
                 </section>
                 </div>
+                {branchId && can('invoices', 'view') && (
+                  <FinanceManagementPanel branchId={branchId} residents={residents} can={can} />
+                )}
               </>
             )}
 

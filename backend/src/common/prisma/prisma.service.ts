@@ -18,6 +18,9 @@ export class PrismaService extends PrismaClient implements OnModuleInit, OnModul
 
   constructor() {
     super({
+      datasources: {
+        db: { url: databaseUrlWithPoolLimit() },
+      },
       log: process.env.NODE_ENV === 'development'
         ? [{ emit: 'event', level: 'query' }, 'info', 'warn', 'error']
         : ['warn', 'error'],
@@ -31,9 +34,11 @@ export class PrismaService extends PrismaClient implements OnModuleInit, OnModul
             ? (operation as (client: Prisma.TransactionClient) => unknown)(context.client)
             : Promise.all(operation as Promise<unknown>[]);
         }
+
         if (!context || property === 'tenantTransaction' || property === 'logger'
           || property === 'onModuleInit' || property === 'onModuleDestroy'
           || property === 'runWithTenantContext' || property === 'runWithPlatformContext'
+          || property === 'runWithIndependentTenantContext'
           || property === 'runWithPlatformLoginContext' || property === 'resolveAuthTokenTenant'
           || property === 'resolvePublicTenantSlug') {
           const value = Reflect.get(target, property, receiver);
@@ -73,6 +78,7 @@ export class PrismaService extends PrismaClient implements OnModuleInit, OnModul
           active.tenantId = previousTenantId;
         }
       }
+
       if (active.tenantId !== tenantId) {
         throw new ForbiddenException('Tenant context cannot change within a request');
       }
@@ -83,6 +89,20 @@ export class PrismaService extends PrismaClient implements OnModuleInit, OnModul
       await client.$queryRaw`SELECT set_config('hms.current_tenant_id', ${tenantId}, TRUE)`;
       return this.tenantTransaction.run({ tenantId, client }, operation);
     }, { timeout: 30_000 });
+  }
+
+  async runWithIndependentTenantContext<T>(
+    tenantId: string,
+    operation: () => Promise<T>,
+  ): Promise<T> {
+    if (!UUID_PATTERN.test(tenantId)) {
+      throw new ForbiddenException('A valid tenant context is required');
+    }
+
+    return this.tenantTransaction.exit(() => this.$transaction(async (client) => {
+      await client.$queryRaw`SELECT set_config('hms.current_tenant_id', ${tenantId}, TRUE)`;
+      return this.tenantTransaction.run({ tenantId, client }, operation);
+    }, { timeout: 30_000 }));
   }
 
   async runWithPlatformContext<T>(platformAdminId: string, operation: () => Promise<T>): Promise<T> {
@@ -156,4 +176,19 @@ export class PrismaService extends PrismaClient implements OnModuleInit, OnModul
       throw new Error('The HMS runtime database role must not be a superuser or have BYPASSRLS.');
     }
   }
+
+}
+
+function databaseUrlWithPoolLimit(): string {
+  const rawUrl = process.env.DATABASE_URL;
+  if (!rawUrl) return '';
+  const poolMax = Number(process.env.DATABASE_POOL_MAX ?? '10');
+  if (!Number.isSafeInteger(poolMax) || poolMax < 1) {
+    throw new Error('DATABASE_POOL_MAX must be a positive integer.');
+  }
+  const url = new URL(rawUrl);
+  if (!url.searchParams.has('connection_limit')) {
+    url.searchParams.set('connection_limit', String(poolMax));
+  }
+  return url.toString();
 }

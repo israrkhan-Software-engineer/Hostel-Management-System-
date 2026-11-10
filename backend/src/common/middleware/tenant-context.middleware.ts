@@ -1,8 +1,11 @@
 import { CallHandler, ExecutionContext, Injectable, NestInterceptor } from '@nestjs/common';
+import { Reflector } from '@nestjs/core';
 import { Request } from 'express';
 import { from, lastValueFrom, mergeMap, Observable } from 'rxjs';
 import { PrismaService } from '../prisma/prisma.service';
 import { hashToken } from '../utils/password.util';
+import { RefreshTokenReuseException } from '../exceptions/refresh-token-reuse.exception';
+import { SKIP_TENANT_TRANSACTION } from '../decorators/skip-tenant-transaction.decorator';
 
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
@@ -18,9 +21,18 @@ type RequestDatabaseContext =
 
 @Injectable()
 export class TenantContextInterceptor implements NestInterceptor {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly reflector: Reflector,
+  ) {}
 
   intercept(context: ExecutionContext, next: CallHandler): Observable<unknown> {
+    const skipTenantTransaction = this.reflector.getAllAndOverride<boolean>(
+      SKIP_TENANT_TRANSACTION,
+      [context.getHandler(), context.getClass()],
+    );
+    if (skipTenantTransaction) return next.handle();
+
     const request = context.switchToHttp().getRequest<Request>();
     return from(this.resolveDatabaseContext(request)).pipe(
       mergeMap((databaseContext) => databaseContext
@@ -32,7 +44,26 @@ export class TenantContextInterceptor implements NestInterceptor {
           : this.prisma.runWithTenantContext(
               databaseContext.tenantId!,
               () => lastValueFrom(next.handle()),
-            ))
+            ).catch(async (error: unknown) => {
+              if (error instanceof RefreshTokenReuseException) {
+                await this.prisma.runWithIndependentTenantContext(error.tenantId, async () => {
+                  await this.prisma.refreshToken.updateMany({
+                    where: { userId: error.userId, tenantId: error.tenantId, isRevoked: false },
+                    data: { isRevoked: true, revokedAt: new Date() },
+                  });
+                  await this.prisma.auditLog.create({
+                    data: {
+                      tenantId: error.tenantId,
+                      actorUserId: error.userId,
+                      action: 'auth.refresh.reuse_detected',
+                      module: 'auth',
+                      outcome: 'failure',
+                    },
+                  });
+                });
+              }
+              throw error;
+            }))
         : next.handle()),
     );
   }
@@ -97,12 +128,10 @@ export class TenantContextInterceptor implements NestInterceptor {
   }
 
   private refreshToken(request: Request): string | undefined {
-    const bodyToken = this.bodyString(request, 'refreshToken');
-    if (bodyToken) return bodyToken;
-    const cookie = request.headers.cookie?.split(';')
-      .map((value) => value.trim())
-      .find((value) => value.startsWith('hms_refresh='));
-    return cookie ? decodeURIComponent(cookie.slice('hms_refresh='.length)) : undefined;
+    const parsedCookie = (request as Request & { cookies?: Record<string, unknown> })
+      .cookies?.['hms_refresh'];
+    if (typeof parsedCookie === 'string') return parsedCookie;
+    return this.bodyString(request, 'refreshToken');
   }
 
   private bodyString(request: Request, key: string): string | undefined {

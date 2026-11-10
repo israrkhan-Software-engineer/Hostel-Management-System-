@@ -1,4 +1,4 @@
-import { IsString, IsNotEmpty, MinLength, IsOptional } from 'class-validator';
+import { IsString, IsNotEmpty, MinLength, IsOptional, Matches } from 'class-validator';
 
 export class LoginDto {
   @IsString() @IsNotEmpty()
@@ -12,6 +12,10 @@ export class LoginDto {
 
   @IsString() @IsOptional()
   deviceInfo?: string;
+
+  @IsOptional() @IsString()
+  @Matches(/^(?:\d{6}|[A-Fa-f0-9]{16})$/)
+  mfaCode?: string;
 }
 
 export class RefreshDto {
@@ -38,4 +42,26 @@ export class CompleteResetDto {
 
   @IsString() @MinLength(8)
   newPassword!: string;
+}
+
+export class BeginMfaEnrollmentDto {
+  @IsString() @MinLength(8)
+  password!: string;
+}
+
+export class CompleteMfaEnrollmentDto {
+  @IsString()
+  @Matches(/^\d{6}$/)
+  code!: string;
+}
+
+export class ChangePasswordDto {
+  @IsString()
+  @MinLength(12)
+  @Matches(/^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)(?=.*[^A-Za-z0-9\s]).{12,128}$/)
+  newPassword!: string;
+
+  @IsString()
+  @MinLength(1)
+  currentPassword!: string;
 }

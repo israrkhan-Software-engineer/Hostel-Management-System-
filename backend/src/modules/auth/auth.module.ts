@@ -8,6 +8,7 @@ import { JwtStrategy } from './jwt.strategy';
 import { TenantsModule } from '../tenants/tenants.module';
 import { UsersModule } from '../users/users.module';
 import { AuditModule } from '../audit/audit.module';
+import { NotificationsModule } from '../notifications/notifications.module';
 
 @Module({
   imports: [
@@ -15,17 +16,32 @@ import { AuditModule } from '../audit/audit.module';
     JwtModule.registerAsync({
       imports: [ConfigModule],
       inject: [ConfigService],
-      useFactory: (config: ConfigService) => ({
-        secret: config.get<string>('app.jwtSecret'),
-        signOptions: { expiresIn: config.get<string>('app.jwtAccessExpiry', '15m') },
-      }),
+      useFactory: (config: ConfigService) => {
+        const accessExpiry = config.get<string>('app.jwtAccessExpiry', '15m');
+        return {
+          secret: config.get<string>('app.jwtSecret'),
+          signOptions: { expiresIn: durationInSeconds(accessExpiry) },
+        };
+      },
     }),
     TenantsModule,
     UsersModule,
     AuditModule,
+    NotificationsModule,
   ],
   providers: [AuthService, JwtStrategy],
   controllers: [AuthController],
   exports: [AuthService, JwtModule],
 })
 export class AuthModule {}
+
+function durationInSeconds(duration: string): number {
+  const value = Number.parseInt(duration, 10);
+  if (!Number.isSafeInteger(value) || value <= 0) {
+    throw new Error('JWT_ACCESS_EXPIRY must be a positive duration.');
+  }
+  if (duration.endsWith('d')) return value * 24 * 60 * 60;
+  if (duration.endsWith('h')) return value * 60 * 60;
+  if (duration.endsWith('m')) return value * 60;
+  return value;
+}

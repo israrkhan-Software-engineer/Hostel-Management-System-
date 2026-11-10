@@ -2,13 +2,19 @@ import {
   BadRequestException,
   ConflictException,
   Injectable,
+  Logger,
   NotFoundException,
+  Optional,
+  ServiceUnavailableException,
 } from '@nestjs/common';
 import { InvoiceStatus, PaymentStatus } from '@prisma/client';
 import { createHash, randomUUID } from 'crypto';
 import PDFDocument = require('pdfkit');
 import { AuditService } from '../audit/audit.service';
+import { NotificationsService } from '../notifications/notifications.service';
 import { PrismaService } from '../../common/prisma/prisma.service';
+import { PaymentProofStorageService } from '../../common/storage/payment-proof-storage.service';
+import { hasPrismaErrorCode } from '../../common/utils/prisma-error.util';
 import {
   CreateInvoiceDto,
   FinanceReportFilterDto,
@@ -23,9 +29,13 @@ const MAX_AMOUNT_MINOR = 2_147_483_647;
 
 @Injectable()
 export class FinanceService {
+  private readonly logger = new Logger(FinanceService.name);
+
   constructor(
     private readonly prisma: PrismaService,
     private readonly audit: AuditService,
+    @Optional() private readonly notifications?: NotificationsService,
+    @Optional() private readonly proofStorage?: PaymentProofStorageService,
   ) {}
 
   async listInvoices(tenantId: string, branchId: string, status?: InvoiceStatus) {
@@ -110,132 +120,163 @@ export class FinanceService {
     dto: SubmitResidentPaymentDto,
     file: UploadedPaymentProof,
   ) {
-    await this.ensureBranch(tenantId, branchId);
     if (!file?.buffer?.length || file.size > 5 * 1024 * 1024) {
       throw new BadRequestException('Payment proof must be a file no larger than 5 MB');
     }
     this.validateProofFile(file);
 
-    const resident = await this.prisma.resident.findFirst({
-      where: { tenantId, branchId, userId, deletedAt: null },
-      select: { id: true },
+    const resident = await this.prisma.runWithTenantContext(tenantId, async () => {
+      await this.ensureBranch(tenantId, branchId);
+      return this.prisma.resident.findFirst({
+        where: { tenantId, branchId, userId, deletedAt: null },
+        select: { id: true },
+      });
     });
     if (!resident) throw new NotFoundException('Student account is not linked to a resident record');
+    if (!this.proofStorage) {
+      throw new ServiceUnavailableException('Payment proof storage is unavailable; configure the private object-storage provider.');
+    }
 
     const reference = dto.reference?.trim() || null;
     const proofNotes = dto.proofNotes?.trim() || null;
     const proofHash = createHash('sha256').update(file.buffer).digest('hex');
-    const result = await this.prisma.$transaction(async (tx) => {
-      const invoiceRows = await tx.$queryRaw<Array<{ id: string }>>`
-        SELECT id FROM invoices
-        WHERE id = ${invoiceId}::uuid
-          AND tenant_id = ${tenantId}::uuid
-          AND branch_id = ${branchId}::uuid
-          AND resident_id = ${resident.id}::uuid
-          AND status = 'ISSUED'
-          AND deleted_at IS NULL
-        FOR UPDATE
-      `;
-      if (!invoiceRows.length) throw new NotFoundException('Issued invoice not found');
+    const proofStorageKey = `payment-proofs/${tenantId}/${randomUUID()}`;
+    let uploadedObjectPending = true;
+    try {
+      await this.proofStorage.put(proofStorageKey, file.buffer, file.mimetype, proofHash);
+      const result = await this.prisma.runWithTenantContext(tenantId, () => (
+        this.prisma.$transaction(async (tx) => {
+          const invoiceRows = await tx.$queryRaw<Array<{ id: string }>>`
+            SELECT id FROM invoices
+            WHERE id = ${invoiceId}::uuid
+              AND tenant_id = ${tenantId}::uuid
+              AND branch_id = ${branchId}::uuid
+              AND resident_id = ${resident.id}::uuid
+              AND status = 'ISSUED'
+              AND deleted_at IS NULL
+            FOR UPDATE
+          `;
+          if (!invoiceRows.length) throw new NotFoundException('Issued invoice not found');
 
-      const existing = await tx.payment.findFirst({
-        where: {
+          const existing = await tx.payment.findFirst({
+            where: {
+              tenantId,
+              branchId,
+              invoiceId,
+              recordedByUserId: userId,
+              submissionKey: dto.submissionKey,
+            },
+            select: {
+              id: true,
+              amountMinor: true,
+              method: true,
+              reference: true,
+              proofNotes: true,
+              proofFileName: true,
+              proofMimeType: true,
+              proofSha256: true,
+              proofData: true,
+            },
+          });
+          if (existing) {
+            const existingProofHash = existing.proofSha256
+              ?? (existing.proofData ? createHash('sha256').update(existing.proofData).digest('hex') : null);
+            if (
+              existing.amountMinor !== dto.amountMinor
+              || existing.method !== dto.method
+              || existing.reference !== reference
+              || existing.proofNotes !== proofNotes
+              || existing.proofFileName !== this.safeProofFileName(file.originalname)
+              || existing.proofMimeType !== file.mimetype
+              || existingProofHash !== proofHash
+            ) {
+              throw new ConflictException('Payment submission key was already used for different payment details');
+            }
+            return { id: existing.id, created: false };
+          }
+
+          const [invoiceAmount, verifiedPayments, pendingPayments, refunds] = await Promise.all([
+            tx.invoiceLine.aggregate({
+              where: { tenantId, branchId, invoiceId },
+              _sum: { lineAmountMinor: true },
+            }),
+            tx.payment.aggregate({
+              where: { tenantId, branchId, invoiceId, status: 'VERIFIED' },
+              _sum: { amountMinor: true },
+            }),
+            tx.payment.aggregate({
+              where: { tenantId, branchId, invoiceId, status: 'PENDING' },
+              _sum: { amountMinor: true },
+            }),
+            tx.refund.aggregate({
+              where: { tenantId, branchId, invoiceId },
+              _sum: { amountMinor: true },
+            }),
+          ]);
+          const due = Math.max(
+            (invoiceAmount._sum.lineAmountMinor ?? 0)
+              - (verifiedPayments._sum.amountMinor ?? 0)
+              + (refunds._sum.amountMinor ?? 0)
+              - (pendingPayments._sum.amountMinor ?? 0),
+            0,
+          );
+          if (dto.amountMinor > due) {
+            throw new BadRequestException('Payment amount exceeds the invoice balance available for verification');
+          }
+          const payment = await tx.payment.create({
+            data: {
+              tenantId,
+              branchId,
+              invoiceId,
+              amountMinor: dto.amountMinor,
+              method: dto.method,
+              reference,
+              proofNotes,
+              submissionKey: dto.submissionKey,
+              proofFileName: this.safeProofFileName(file.originalname),
+              proofMimeType: file.mimetype,
+              proofStorageKey,
+              proofSha256: proofHash,
+              recordedByUserId: userId,
+            },
+            select: { id: true },
+          });
+          return { id: payment.id, created: true };
+        })
+      ));
+
+      if (!result.created) {
+        await this.proofStorage.delete(proofStorageKey);
+        uploadedObjectPending = false;
+      } else {
+        uploadedObjectPending = false;
+        await this.prisma.runWithTenantContext(tenantId, () => this.audit.log({
           tenantId,
           branchId,
-          invoiceId,
-          recordedByUserId: userId,
-          submissionKey: dto.submissionKey,
-        },
-        select: {
-          id: true,
-          amountMinor: true,
-          method: true,
-          reference: true,
-          proofNotes: true,
-          proofFileName: true,
-          proofMimeType: true,
-          proofData: true,
-        },
-      });
-      if (existing) {
-        const sameProof = existing.proofData
-          ? createHash('sha256').update(existing.proofData).digest('hex') === proofHash
-          : false;
-        if (
-          existing.amountMinor !== dto.amountMinor ||
-          existing.method !== dto.method ||
-          existing.reference !== reference ||
-          existing.proofNotes !== proofNotes ||
-          existing.proofFileName !== this.safeProofFileName(file.originalname) ||
-          existing.proofMimeType !== file.mimetype ||
-          !sameProof
-        ) {
-          throw new ConflictException('Payment submission key was already used for different payment details');
+          actorUserId: userId,
+          action: 'payment.proof.submit',
+          module: 'payment_proofs',
+          entityType: 'payment',
+          entityId: result.id,
+          outcome: 'success',
+          metadata: { amountMinor: dto.amountMinor, method: dto.method, fileName: this.safeProofFileName(file.originalname) },
+        }));
+      }
+      return this.prisma.runWithTenantContext(tenantId, () => this.getInvoice(tenantId, branchId, invoiceId));
+    } catch (error) {
+      if (uploadedObjectPending) {
+        try {
+          await this.proofStorage.delete(proofStorageKey);
+        } catch (cleanupError) {
+          this.logger.error(
+            `Could not remove unreferenced payment proof object ${proofStorageKey}: ${
+              cleanupError instanceof Error ? cleanupError.message : String(cleanupError)
+            }`,
+          );
         }
-        return { id: existing.id, created: false };
       }
-
-      const [invoiceAmount, verifiedPayments, pendingPayments, refunds] = await Promise.all([
-        tx.invoiceLine.aggregate({
-          where: { tenantId, branchId, invoiceId },
-          _sum: { lineAmountMinor: true },
-        }),
-        tx.payment.aggregate({
-          where: { tenantId, branchId, invoiceId, status: 'VERIFIED' },
-          _sum: { amountMinor: true },
-        }),
-        tx.payment.aggregate({
-          where: { tenantId, branchId, invoiceId, status: 'PENDING' },
-          _sum: { amountMinor: true },
-        }),
-        tx.refund.aggregate({
-          where: { tenantId, branchId, invoiceId },
-          _sum: { amountMinor: true },
-        }),
-      ]);
-      const due = Math.max(
-        (invoiceAmount._sum.lineAmountMinor ?? 0)
-          - (verifiedPayments._sum.amountMinor ?? 0)
-          + (refunds._sum.amountMinor ?? 0)
-          - (pendingPayments._sum.amountMinor ?? 0),
-        0,
-      );
-      if (dto.amountMinor > due) {
-        throw new BadRequestException('Payment amount exceeds the invoice balance available for verification');
-      }
-      const payment = await tx.payment.create({
-        data: {
-          tenantId,
-          branchId,
-          invoiceId,
-          amountMinor: dto.amountMinor,
-          method: dto.method,
-          reference,
-          proofNotes,
-          submissionKey: dto.submissionKey,
-          proofFileName: this.safeProofFileName(file.originalname),
-          proofMimeType: file.mimetype,
-          proofData: file.buffer,
-          recordedByUserId: userId,
-        },
-        select: { id: true },
-      });
-      return { id: payment.id, created: true };
-    });
-    if (result.created) {
-      await this.audit.log({
-        tenantId,
-        branchId,
-        actorUserId: userId,
-        action: 'payment.proof.submit',
-        module: 'payment_proofs',
-        entityType: 'payment',
-        entityId: result.id,
-        outcome: 'success',
-        metadata: { amountMinor: dto.amountMinor, method: dto.method, fileName: this.safeProofFileName(file.originalname) },
-      });
+      throw error;
     }
-    return this.getInvoice(tenantId, branchId, invoiceId);
   }
 
   async getResidentPaymentProof(
@@ -244,32 +285,69 @@ export class FinanceService {
     userId: string,
     paymentId: string,
   ) {
-    await this.ensureBranch(tenantId, branchId);
-    const payment = await this.prisma.payment.findFirst({
-      where: {
-        id: paymentId,
-        tenantId,
-        branchId,
-        invoice: { resident: { userId } },
-      },
-      select: { proofData: true, proofFileName: true, proofMimeType: true },
+    const payment = await this.prisma.runWithTenantContext(tenantId, async () => {
+      await this.ensureBranch(tenantId, branchId);
+      return this.prisma.payment.findFirst({
+        where: {
+          id: paymentId,
+          tenantId,
+          branchId,
+          invoice: { resident: { userId } },
+        },
+        select: {
+          proofData: true,
+          proofStorageKey: true,
+          proofSha256: true,
+          proofFileName: true,
+          proofMimeType: true,
+        },
+      });
     });
-    if (!payment?.proofData || !payment.proofFileName || !payment.proofMimeType) {
-      throw new NotFoundException('Payment proof not found');
-    }
-    return payment;
+    return this.loadPaymentProof(payment);
   }
 
   async getPaymentProof(tenantId: string, branchId: string, paymentId: string) {
-    await this.ensureBranch(tenantId, branchId);
-    const payment = await this.prisma.payment.findFirst({
-      where: { id: paymentId, tenantId, branchId },
-      select: { proofData: true, proofFileName: true, proofMimeType: true },
+    const payment = await this.prisma.runWithTenantContext(tenantId, async () => {
+      await this.ensureBranch(tenantId, branchId);
+      return this.prisma.payment.findFirst({
+        where: { id: paymentId, tenantId, branchId },
+        select: {
+          proofData: true,
+          proofStorageKey: true,
+          proofSha256: true,
+          proofFileName: true,
+          proofMimeType: true,
+        },
+      });
     });
-    if (!payment?.proofData || !payment.proofFileName || !payment.proofMimeType) {
+    return this.loadPaymentProof(payment);
+  }
+
+  private async loadPaymentProof(
+    payment: {
+      proofData: Uint8Array | null;
+      proofStorageKey: string | null;
+      proofSha256: string | null;
+      proofFileName: string | null;
+      proofMimeType: string | null;
+    } | null,
+  ) {
+    if (!payment?.proofFileName || !payment.proofMimeType) {
       throw new NotFoundException('Payment proof not found');
     }
-    return payment;
+    if (payment.proofData) return payment;
+    if (!payment.proofStorageKey) throw new NotFoundException('Payment proof not found');
+    if (!this.proofStorage) {
+      throw new ServiceUnavailableException('Payment proof storage is unavailable');
+    }
+    const proofData = await this.proofStorage.get(payment.proofStorageKey);
+    if (payment.proofSha256 && createHash('sha256').update(proofData).digest('hex') !== payment.proofSha256) {
+      throw new ServiceUnavailableException('Stored payment proof failed its integrity check');
+    }
+    return {
+      ...payment,
+      proofData,
+    };
   }
 
   async getInvoice(tenantId: string, branchId: string, invoiceId: string) {
@@ -304,31 +382,37 @@ export class FinanceService {
   }
 
   async generateInvoicePdf(tenantId: string, branchId: string, invoiceId: string) {
-    const invoice = await this.getInvoice(tenantId, branchId, invoiceId);
-    const [tenant, priorInvoices] = await Promise.all([
-      this.prisma.tenant.findUnique({ where: { id: tenantId }, select: { name: true } }),
-      this.prisma.invoice.findMany({
-        where: {
-          tenantId,
-          branchId,
-          residentId: invoice.residentId,
-          status: 'ISSUED',
-          deletedAt: null,
-          issuedAt: { lt: invoice.issuedAt },
-        },
-        include: {
-          lines: { select: { lineAmountMinor: true } },
-          payments: { where: { status: 'VERIFIED' }, select: { amountMinor: true } },
-          refunds: { select: { amountMinor: true } },
-        },
-      }),
-    ]);
-    const previousBalanceMinor = priorInvoices.reduce((sum, prior) => {
-      const total = prior.lines.reduce((lineSum, line) => lineSum + line.lineAmountMinor, 0);
-      const paid = prior.payments.reduce((paymentSum, payment) => paymentSum + payment.amountMinor, 0);
-      const refunded = prior.refunds.reduce((refundSum, refund) => refundSum + refund.amountMinor, 0);
-      return sum + Math.max(total - paid + refunded, 0);
-    }, 0);
+    const { invoice, tenantName, previousBalanceMinor } = await this.prisma.runWithTenantContext(
+      tenantId,
+      async () => {
+        const invoice = await this.getInvoice(tenantId, branchId, invoiceId);
+        const [tenant, priorInvoices] = await Promise.all([
+          this.prisma.tenant.findUnique({ where: { id: tenantId }, select: { name: true } }),
+          this.prisma.invoice.findMany({
+            where: {
+              tenantId,
+              branchId,
+              residentId: invoice.residentId,
+              status: 'ISSUED',
+              deletedAt: null,
+              issuedAt: { lt: invoice.issuedAt },
+            },
+            include: {
+              lines: { select: { lineAmountMinor: true } },
+              payments: { where: { status: 'VERIFIED' }, select: { amountMinor: true } },
+              refunds: { select: { amountMinor: true } },
+            },
+          }),
+        ]);
+        const previousBalanceMinor = priorInvoices.reduce((sum, prior) => {
+          const total = prior.lines.reduce((lineSum, line) => lineSum + line.lineAmountMinor, 0);
+          const paid = prior.payments.reduce((paymentSum, payment) => paymentSum + payment.amountMinor, 0);
+          const refunded = prior.refunds.reduce((refundSum, refund) => refundSum + refund.amountMinor, 0);
+          return sum + Math.max(total - paid + refunded, 0);
+        }, 0);
+        return { invoice, tenantName: tenant?.name ?? 'Hostel', previousBalanceMinor };
+      },
+    );
     const money = (amountMinor: number) => new Intl.NumberFormat('en-PK', {
       style: 'currency',
       currency: invoice.currency,
@@ -343,7 +427,7 @@ export class FinanceService {
       document.on('error', reject);
     });
 
-    document.fontSize(20).text(tenant?.name ?? 'Hostel', { align: 'center' });
+    document.fontSize(20).text(tenantName, { align: 'center' });
     document.moveDown(0.4).fontSize(15).text('INVOICE', { align: 'center' });
     document.moveDown();
     document.fontSize(10).text(`Invoice number: ${invoice.invoiceNumber}`);
@@ -603,6 +687,7 @@ export class FinanceService {
     branchId: string,
     actorUserId: string,
     dto: CreateInvoiceDto,
+    feeAssignmentId?: string,
   ) {
     await this.ensureBranch(tenantId, branchId);
     const lineData = dto.lines.map((line) => {
@@ -625,16 +710,25 @@ export class FinanceService {
     const [resident, tenant] = await Promise.all([
       this.prisma.resident.findFirst({
         where: { id: dto.residentId, tenantId, branchId, status: 'ACTIVE', deletedAt: null },
-        select: { id: true },
+        select: { id: true, firstName: true, lastName: true, email: true, phone: true, userId: true },
       }),
       this.prisma.tenant.findUnique({ where: { id: tenantId }, select: { currency: true } }),
     ]);
     if (!resident) throw new NotFoundException('Active resident not found in this branch');
     if (!tenant) throw new NotFoundException('Tenant not found');
+    if (feeAssignmentId) {
+      const alreadyInvoiced = await this.prisma.invoice.findFirst({
+        where: { tenantId, branchId, feeAssignmentId, deletedAt: null },
+        select: { id: true },
+      });
+      if (alreadyInvoiced) throw new ConflictException('This fee assignment already has an invoice');
+    }
 
     const invoiceId = randomUUID();
     const invoiceNumber = `HMS-${new Date().toISOString().slice(0, 10).replace(/-/g, '')}-${invoiceId.slice(0, 8).toUpperCase()}`;
-    const invoice = await this.prisma.invoice.create({
+    let invoice;
+    try {
+      invoice = await this.prisma.invoice.create({
       data: {
         id: invoiceId,
         tenantId,
@@ -645,6 +739,7 @@ export class FinanceService {
         dueAt: dto.dueAt ? new Date(dto.dueAt) : null,
         notes: dto.notes?.trim() || null,
         createdByUserId: actorUserId,
+        ...(feeAssignmentId ? { feeAssignmentId } : {}),
         lines: { create: lineData.map((line) => ({ ...line, tenantId, branchId })) },
       },
       include: {
@@ -653,7 +748,13 @@ export class FinanceService {
         payments: true,
         refunds: true,
       },
-    });
+      });
+    } catch (error) {
+      if (feeAssignmentId && hasPrismaErrorCode(error, 'P2002')) {
+        throw new ConflictException('This fee assignment already has an invoice');
+      }
+      throw error;
+    }
     await this.audit.log({
       tenantId,
       branchId,
@@ -665,7 +766,86 @@ export class FinanceService {
       outcome: 'success',
       metadata: { invoiceNumber, amountMinor: invoiceTotal, currency: tenant.currency },
     });
+    const invoiceMessage = `Invoice ${invoiceNumber} has been generated for ${new Intl.NumberFormat('en-PK', {
+      style: 'currency',
+      currency: tenant.currency,
+    }).format(invoiceTotal / 100)}.`;
+    if (resident.userId && this.notifications) {
+      await this.notifications.notifyUser({
+        tenantId,
+        branchId,
+        userId: resident.userId,
+        category: 'finance',
+        title: 'New invoice generated',
+        body: invoiceMessage,
+        ...(resident.email ? {
+          email: {
+            to: resident.email,
+            subject: `New hostel invoice ${invoiceNumber}`,
+            text: invoiceMessage,
+          },
+        } : {}),
+        ...(resident.phone ? { sms: { to: resident.phone, text: invoiceMessage } } : {}),
+        deduplicationKey: `invoice-created:${invoice.id}`,
+      });
+    } else if (resident.email) {
+      await this.notifications?.enqueueDelivery({
+        kind: 'email',
+        to: resident.email,
+        subject: `New hostel invoice ${invoiceNumber}`,
+        text: invoiceMessage,
+      }, `invoice-created:${invoice.id}`);
+    }
+    if (dto.dueAt) {
+      const reminderAt = new Date(dto.dueAt).getTime();
+      const delay = Math.max(0, reminderAt - Date.now());
+      if (this.notifications) {
+        await this.notifications.schedulePaymentReminder({
+          tenantId,
+          branchId,
+          residentId: resident.id,
+          invoiceId: invoice.id,
+          invoiceNumber,
+          delay,
+        });
+      }
+    }
     return this.presentInvoice(invoice);
+  }
+
+  async sendPendingRentReminder(tenantId: string, branchId: string, invoiceId: string) {
+    if (!this.notifications) throw new Error('Notification delivery is unavailable');
+    const invoice = await this.prisma.invoice.findFirst({
+      where: {
+        id: invoiceId,
+        tenantId,
+        branchId,
+        status: 'ISSUED',
+        deletedAt: null,
+        dueAt: { lte: new Date() },
+      },
+      include: {
+        lines: { select: { lineAmountMinor: true } },
+        payments: { where: { status: 'VERIFIED' }, select: { amountMinor: true } },
+        refunds: { select: { amountMinor: true } },
+      },
+    });
+    if (!invoice) return { sent: false };
+    const total = invoice.lines.reduce((sum, line) => sum + line.lineAmountMinor, 0);
+    const paid = invoice.payments.reduce((sum, payment) => sum + payment.amountMinor, 0);
+    const refunded = invoice.refunds.reduce((sum, refund) => sum + refund.amountMinor, 0);
+    if (total - paid + refunded <= 0) return { sent: false };
+    await this.notifications.notifyResident({
+      tenantId,
+      branchId,
+      residentId: invoice.residentId,
+      category: 'finance',
+      title: 'Payment due',
+      body: `Payment for invoice ${invoice.invoiceNumber} is now due. Please review your invoice and outstanding balance.`,
+      emailSubject: `Payment due for invoice ${invoice.invoiceNumber}`,
+      deduplicationKey: `pending-rent:${invoice.id}`,
+    });
+    return { sent: true };
   }
 
   async recordPayment(
@@ -794,6 +974,47 @@ export class FinanceService {
       outcome: 'success',
       metadata: { rejectionReason: dto.status === 'REJECTED' ? dto.rejectionReason!.trim() : null },
     });
+    if (dto.status === 'VERIFIED') {
+      const invoice = await this.prisma.invoice.findFirst({
+        where: { id: existing.invoiceId, tenantId, branchId },
+        select: {
+          invoiceNumber: true,
+          residentId: true,
+          resident: { select: { userId: true, email: true, phone: true } },
+        },
+      });
+      if (invoice && this.notifications) {
+        const message = `Your payment for invoice ${invoice.invoiceNumber} has been confirmed.`;
+        if (invoice.resident.userId) {
+          await this.notifications.notifyUser({
+            tenantId,
+            branchId,
+            userId: invoice.resident.userId,
+            category: 'finance',
+            title: 'Payment confirmed',
+            body: message,
+            ...(invoice.resident.email ? {
+              email: {
+                to: invoice.resident.email,
+                subject: 'Hostel payment confirmed',
+                text: message,
+              },
+            } : {}),
+            ...(invoice.resident.phone ? {
+              sms: { to: invoice.resident.phone, text: message },
+            } : {}),
+            deduplicationKey: `payment-verified:${paymentId}`,
+          });
+        } else if (invoice.resident.email) {
+          await this.notifications.enqueueDelivery({
+            kind: 'email',
+            to: invoice.resident.email,
+            subject: 'Hostel payment confirmed',
+            text: message,
+          }, `payment-verified:${paymentId}`);
+        }
+      }
+    }
     return this.getInvoice(tenantId, branchId, existing.invoiceId);
   }
 

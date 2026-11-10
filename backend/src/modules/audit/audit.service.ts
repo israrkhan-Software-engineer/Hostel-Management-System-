@@ -21,6 +21,30 @@ export interface AuditEntry {
 export class AuditService {
   constructor(private prisma: PrismaService) {}
 
+  async logOrThrow(entry: AuditEntry): Promise<void> {
+    if (!entry.tenantId) throw new Error('A tenant context is required for a durable audit event.');
+    await this.prisma.auditLog.create({
+      data: {
+        tenantId: entry.tenantId,
+        branchId: entry.branchId ?? null,
+        actorUserId: entry.actorUserId ?? null,
+        action: entry.action,
+        module: entry.module,
+        entityType: entry.entityType ?? null,
+        entityId: entry.entityId ?? null,
+        outcome: entry.outcome,
+        beforeData: entry.beforeData ?? Prisma.DbNull,
+        afterData: entry.afterData ?? Prisma.DbNull,
+        metadata: entry.metadata ?? Prisma.DbNull,
+      },
+    });
+  }
+
+  async logDurably(entry: AuditEntry): Promise<void> {
+    if (!entry.tenantId) throw new Error('A tenant context is required for a durable audit event.');
+    await this.prisma.runWithIndependentTenantContext(entry.tenantId, () => this.logOrThrow(entry));
+  }
+
   /**
    * Write an audit entry — append-only, no update/delete path.
    * Sensitive values (CNIC, health, passwords) must NEVER appear in any payload.

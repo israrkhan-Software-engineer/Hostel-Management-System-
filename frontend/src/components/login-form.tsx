@@ -15,6 +15,7 @@ export default function LoginForm({ audience, tenantSlug: studentTenantSlug }: L
   const [staffTenantSlug, setStaffTenantSlug] = useState('');
   const [login, setLogin] = useState('');
   const [password, setPassword] = useState('');
+  const [mfaCode, setMfaCode] = useState('');
   const [error, setError] = useState('');
   const [submitting, setSubmitting] = useState(false);
 
@@ -28,6 +29,7 @@ export default function LoginForm({ audience, tenantSlug: studentTenantSlug }: L
         tenantSlug: isStudent ? studentTenantSlug : staffTenantSlug.trim(),
         login: login.trim(),
         password,
+        ...(mfaCode.trim() ? { mfaCode: mfaCode.trim() } : {}),
       }),
     });
     setSubmitting(false);
@@ -79,10 +81,20 @@ export default function LoginForm({ audience, tenantSlug: studentTenantSlug }: L
           Password
           <input required type="password" autoComplete="current-password" value={password} onChange={(event) => setPassword(event.target.value)} />
         </label>
+        <label>
+          Authenticator or recovery code (if enabled)
+          <input
+            inputMode="numeric"
+            autoComplete="one-time-code"
+            value={mfaCode}
+            onChange={(event) => setMfaCode(event.target.value)}
+          />
+        </label>
         {error && <p className="form-error" role="alert">{error}</p>}
         <button className="button primary full-width" type="submit" disabled={submitting}>
           {submitting ? 'Signing in…' : 'Sign in'}
         </button>
+        <a className="quiet-link" href="/forgot-password">Forgot your password?</a>
         {isStudent && <a className="quiet-link" href="/login">Staff sign in</a>}
         <a className="quiet-link" href="/">Return to public page</a>
         {!isStudent && <a className="quiet-link" href="/platform-admin/login">Platform administrator sign in</a>}

@@ -31,9 +31,9 @@ export function verifyTotp(secret: string, value: string, now = Date.now()): boo
   return false;
 }
 
-export function authenticatorUri(secret: string, email: string): string {
-  const label = encodeURIComponent(`HMS Platform:${email}`);
-  const query = new URLSearchParams({ secret, issuer: 'HMS Platform', algorithm: 'SHA1', digits: '6', period: '30' });
+export function authenticatorUri(secret: string, email: string, issuer = 'HMS Platform'): string {
+  const label = encodeURIComponent(`${issuer}:${email}`);
+  const query = new URLSearchParams({ secret, issuer, algorithm: 'SHA1', digits: '6', period: '30' });
   return `otpauth://totp/${label}?${query.toString()}`;
 }
 

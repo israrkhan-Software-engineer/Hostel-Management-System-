@@ -1,6 +1,12 @@
 # memory.md — HMS Session Handoff
 
-**Last updated:** 2026-11-02 (local CRUD/offline follow-up)
+**Last updated:** 2026-11-10 (Phase 5 performance and storage implementation)
+
+## Current handoff — 2026-11-10
+
+Phase 5 performance work adds short explicit tenant-scoped operations for payment proof object I/O and invoice PDF generation, while keeping payment allocation inside a locked atomic DB transaction. Payment proof uploads now use private S3-compatible object storage; legacy BYTEA values remain readable until the additive migration and rerunnable backfill are applied. The migration is `20261112000000_payment_proof_object_storage`; it has not been applied. Configure private S3 storage and run `npm run migrate:payment-proofs` with a migration-only RLS-bypass connection after deploying the new schema/API. Prisma's per-process connection limit is configurable with `DATABASE_POOL_MAX`. Student/staff portals share `useOnlineStatus`; student payment UI/types are split into reusable domain files; visitor operations are organized under `modules/visitors` with compatibility exports for former phase paths.
+
+No tests were run. Backend typecheck/lint and Prisma validation are the relevant remaining static checks; frontend typecheck may still report the previously noted generated Next.js `student-login` type mismatch. The project is not certified against the stated throughput, latency, tenant-count, RPO, or RTO targets. Historical phase status entries and verification notes below predate Phase 5 and are retained as history.
 
 ## Current handoff — 2026-11-02
 

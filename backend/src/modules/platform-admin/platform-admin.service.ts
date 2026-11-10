@@ -164,6 +164,37 @@ export class PlatformAdminService {
           });
           return createdOwner;
         });
+        const trialSettings = await this.prisma.trialSettings.findUnique({ where: { id: 1 } });
+        if (!trialSettings) {
+          throw new InternalServerErrorException('Platform trial settings have not been initialized');
+        }
+        const trialStartedAt = new Date();
+        const trialEndsAt = new Date(
+          trialStartedAt.getTime() + trialSettings.durationDays * 86_400_000,
+        );
+        const subscription = await this.prisma.tenantSubscription.create({
+          data: {
+            tenantId: tenant.id,
+            planId: trialSettings.trialPlanId,
+            status: 'TRIAL',
+            trialStartedAt,
+            trialEndsAt,
+            periodStartedAt: trialStartedAt,
+            periodEndsAt: trialEndsAt,
+          },
+        });
+        await this.prisma.subscriptionHistory.create({
+          data: {
+            tenantId: tenant.id,
+            subscriptionId: subscription.id,
+            platformAdminId: adminId,
+            event: 'trial.started',
+            details: {
+              planId: trialSettings.trialPlanId,
+              durationDays: trialSettings.durationDays,
+            },
+          },
+        });
         await this.audit(adminId, 'tenant.create', tenant.id, { status: tenant.status }, owner.id);
         return tenant;
       } catch (error) {

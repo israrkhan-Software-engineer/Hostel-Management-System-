@@ -5,11 +5,15 @@ import { Throttle } from '@nestjs/throttler';
 import { ApiTags, ApiBearerAuth } from '@nestjs/swagger';
 import { Response, Request } from 'express';
 import { AuthService } from './auth.service';
-import { LoginDto, RefreshDto, LogoutDto, InitiateResetDto, CompleteResetDto } from './auth.dto';
+import {
+  LoginDto, RefreshDto, LogoutDto, InitiateResetDto, CompleteResetDto,
+  BeginMfaEnrollmentDto, CompleteMfaEnrollmentDto, ChangePasswordDto,
+} from './auth.dto';
 import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
 import { CurrentUser, RequestUser } from '../../common/decorators/current-user.decorator';
 import { Public } from '../../common/decorators/public.decorator';
 import { UsersService } from '../users/users.service';
+import { RequirePermission } from '../../common/decorators/require-permission.decorator';
 
 const REFRESH_COOKIE = 'hms_refresh';
 const COOKIE_OPTS = {
@@ -26,6 +30,7 @@ export class AuthController {
 
   @Get('profile')
   @UseGuards(JwtAuthGuard)
+  @RequirePermission('users', 'view')
   @ApiBearerAuth()
   async profile(@CurrentUser() currentUser: RequestUser) {
     const user = await this.users.findByIdWithRoles(currentUser.userId);
@@ -37,6 +42,7 @@ export class AuthController {
       id: user.id,
       email: user.email,
       phone: user.phone,
+      mfaEnabled: user.mfaEnabled,
       roles: user.userRoles.map(({ role }) => role.name),
       permissions: [
         ...new Set(
@@ -83,16 +89,22 @@ export class AuthController {
     @Body() dto: RefreshDto,
     @Res({ passthrough: true }) res: Response,
   ) {
-    const rawToken = (req.cookies?.[REFRESH_COOKIE] as string | undefined) ?? dto.refreshToken;
+    const rawToken = this.refreshCookie(req) ?? dto.refreshToken;
     if (!rawToken) {
-      return res.status(HttpStatus.UNAUTHORIZED).json({ message: 'No refresh token' });
+      res.clearCookie(REFRESH_COOKIE, COOKIE_OPTS);
+      throw new UnauthorizedException('No refresh token');
     }
-    const tokens = await this.auth.refresh(rawToken);
-    res.cookie(REFRESH_COOKIE, tokens.refreshToken, {
-      ...COOKIE_OPTS,
-      maxAge: 7 * 24 * 60 * 60 * 1000,
-    });
-    return { accessToken: tokens.accessToken, expiresIn: tokens.expiresIn };
+    try {
+      const tokens = await this.auth.refresh(rawToken);
+      res.cookie(REFRESH_COOKIE, tokens.refreshToken, {
+        ...COOKIE_OPTS,
+        maxAge: 7 * 24 * 60 * 60 * 1000,
+      });
+      return { accessToken: tokens.accessToken, expiresIn: tokens.expiresIn };
+    } catch (error) {
+      res.clearCookie(REFRESH_COOKIE, COOKIE_OPTS);
+      throw error;
+    }
   }
 
   /** POST /api/v1/auth/logout — revokes the current refresh token */
@@ -104,19 +116,40 @@ export class AuthController {
     @Body() dto: LogoutDto,
     @Res({ passthrough: true }) res: Response,
   ) {
-    const rawToken = (req.cookies?.[REFRESH_COOKIE] as string | undefined) ?? dto.refreshToken;
-    if (rawToken) await this.auth.logout(rawToken);
-    res.clearCookie(REFRESH_COOKIE, { ...COOKIE_OPTS });
+    const rawToken = this.refreshCookie(req) ?? dto.refreshToken;
+    try {
+      if (rawToken) await this.auth.logout(rawToken);
+    } finally {
+      res.clearCookie(REFRESH_COOKIE, COOKIE_OPTS);
+    }
   }
 
   /** POST /api/v1/auth/logout-all — revokes ALL sessions for the authenticated user */
   @Post('logout-all')
   @HttpCode(HttpStatus.NO_CONTENT)
   @UseGuards(JwtAuthGuard)
+  @RequirePermission('users', 'view')
   @ApiBearerAuth()
   async logoutAll(@Req() req: Request & { user: { userId: string } }, @Res({ passthrough: true }) res: Response) {
-    await this.auth.logoutAll(req.user.userId);
-    res.clearCookie(REFRESH_COOKIE, { ...COOKIE_OPTS });
+    try {
+      await this.auth.logoutAll(req.user.userId);
+    } finally {
+      res.clearCookie(REFRESH_COOKIE, COOKIE_OPTS);
+    }
+  }
+
+  @Post('change-password')
+  @HttpCode(HttpStatus.NO_CONTENT)
+  @UseGuards(JwtAuthGuard)
+  @RequirePermission('users', 'view')
+  @ApiBearerAuth()
+  async changePassword(
+    @CurrentUser() user: RequestUser,
+    @Body() dto: ChangePasswordDto,
+    @Res({ passthrough: true }) res: Response,
+  ) {
+    await this.auth.changePassword(user.userId, user.tenantId, dto.currentPassword, dto.newPassword);
+    res.clearCookie(REFRESH_COOKIE, COOKIE_OPTS);
   }
 
   /** POST /api/v1/auth/reset-password — initiate reset (time-limited single-use token) */
@@ -125,8 +158,12 @@ export class AuthController {
   @HttpCode(HttpStatus.OK)
   @Throttle({ default: { ttl: 60_000, limit: 3 } })
   async initiateReset(@Body() dto: InitiateResetDto) {
-    const tenant = await this.auth['tenants'].findBySlug(dto.tenantSlug);
-    await this.auth.initiatePasswordReset(tenant.id, dto.login);
+    const startedAt = Date.now();
+    await this.auth.initiatePasswordResetBySlug(dto.tenantSlug, dto.login);
+    const remainingDelay = 250 - (Date.now() - startedAt);
+    if (remainingDelay > 0) {
+      await new Promise((resolve) => setTimeout(resolve, remainingDelay));
+    }
     // Always return same response to prevent user enumeration
     return { message: 'If an account exists, a reset link has been sent' };
   }
@@ -137,5 +174,35 @@ export class AuthController {
   @HttpCode(HttpStatus.NO_CONTENT)
   async completeReset(@Body() dto: CompleteResetDto) {
     await this.auth.completePasswordReset(dto.token, dto.newPassword);
+  }
+
+  @Post('mfa/enroll')
+  @HttpCode(HttpStatus.OK)
+  @UseGuards(JwtAuthGuard)
+  @RequirePermission('users', 'view')
+  @Throttle({ default: { ttl: 60_000, limit: 5 } })
+  async beginMfaEnrollment(
+    @CurrentUser() user: RequestUser,
+    @Body() dto: BeginMfaEnrollmentDto,
+  ) {
+    return this.auth.beginTenantMfaEnrollment(user.userId, user.tenantId, dto.password);
+  }
+
+  @Post('mfa/enroll/complete')
+  @HttpCode(HttpStatus.OK)
+  @UseGuards(JwtAuthGuard)
+  @RequirePermission('users', 'view')
+  @Throttle({ default: { ttl: 60_000, limit: 5 } })
+  async completeMfaEnrollment(
+    @CurrentUser() user: RequestUser,
+    @Body() dto: CompleteMfaEnrollmentDto,
+  ) {
+    return this.auth.completeTenantMfaEnrollment(user.userId, user.tenantId, dto.code);
+  }
+
+  private refreshCookie(request: Request): string | undefined {
+    const cookie = (request as Request & { cookies?: Record<string, unknown> })
+      .cookies?.[REFRESH_COOKIE];
+    return typeof cookie === 'string' ? cookie : undefined;
   }
 }

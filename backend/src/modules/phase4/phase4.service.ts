@@ -3,9 +3,11 @@ import {
   ConflictException,
   Injectable,
   NotFoundException,
+  Optional,
 } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import { AuditService } from '../audit/audit.service';
+import { NotificationsService } from '../notifications/notifications.service';
 import { PrismaService } from '../../common/prisma/prisma.service';
 import {
   CreateComplaintDto,
@@ -36,6 +38,7 @@ export class Phase4Service {
   constructor(
     private readonly prisma: PrismaService,
     private readonly audit: AuditService,
+    @Optional() private readonly notifications?: NotificationsService,
   ) {}
 
   async listMessMenus(tenantId: string, branchId: string, weekStart?: string) {
@@ -475,6 +478,9 @@ export class Phase4Service {
       afterData: { status: notice.status },
       outcome: 'success',
     });
+    if (notice.status === 'PUBLISHED' && current.status !== 'PUBLISHED') {
+      await this.notifications?.schedulePublishedAnnouncement(tenantId, branchId, notice.id);
+    }
     return notice;
   }
 

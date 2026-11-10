@@ -115,10 +115,11 @@ export async function apiRequest<T>(
 export async function apiUpload<T>(
   path: string,
   formData: FormData,
+  method: 'POST' | 'PUT' = 'POST',
 ): Promise<ApiResponse<T>> {
   try {
     const sendUpload = () => fetch(`${API_BASE}/api/v1${path}`, {
-      method: 'POST',
+      method,
       headers: accessToken ? { Authorization: `Bearer ${accessToken}` } : {},
       body: formData,
       credentials: 'include',

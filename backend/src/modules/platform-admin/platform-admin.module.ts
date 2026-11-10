@@ -5,6 +5,7 @@ import { PlatformAdminController } from './platform-admin.controller';
 import { PlatformAdminGuard } from './platform-admin.guard';
 import { PlatformAdminService } from './platform-admin.service';
 import { PlatformAuthService } from './platform-auth.service';
+import { SaasService } from './saas.service';
 
 @Module({
   imports: [
@@ -15,6 +16,6 @@ import { PlatformAuthService } from './platform-auth.service';
     }),
   ],
   controllers: [PlatformAdminController],
-  providers: [PlatformAdminService, PlatformAuthService, PlatformAdminGuard],
+  providers: [PlatformAdminService, PlatformAuthService, PlatformAdminGuard, SaasService],
 })
 export class PlatformAdminModule {}
