@@ -317,43 +317,54 @@ export class SaasService {
     return this.prisma.runWithPlatformContext(adminId, async () => {
       try {
         const result = await this.prisma.$transaction(async (tx) => {
-        const invoice = await tx.platformInvoice.findUnique({ where: { id: invoiceId } });
-        if (!invoice) throw new NotFoundException('Subscription invoice not found');
-        if (invoice.status === PlatformInvoiceStatus.VOID) {
-          throw new ConflictException('Voided subscription invoices cannot be paid');
-        }
-        if (dto.amountMinor !== invoice.amountMinor) {
-          throw new BadRequestException('Payment amount must exactly match the invoice balance');
-        }
-        const existing = await tx.platformPayment.findUnique({
-          where: { idempotencyKey: dto.idempotencyKey },
-        });
-        if (existing) {
-          if (existing.invoiceId !== invoiceId || existing.amountMinor !== dto.amountMinor) {
-            throw new ConflictException('Idempotency key was already used for a different payment');
+          const invoiceRows = await tx.$queryRaw<Array<{
+            id: string;
+            tenantId: string;
+            amountMinor: number;
+            status: PlatformInvoiceStatus;
+          }>>`
+            SELECT id, "tenant_id" AS "tenantId", "amount_minor" AS "amountMinor", status
+            FROM "platform_invoices"
+            WHERE id = ${invoiceId}::uuid
+            FOR UPDATE
+          `;
+          const invoice = invoiceRows[0];
+          if (!invoice) throw new NotFoundException('Subscription invoice not found');
+          if (invoice.status === PlatformInvoiceStatus.VOID) {
+            throw new ConflictException('Voided subscription invoices cannot be paid');
           }
-          return existing;
-        }
-        if (invoice.status === PlatformInvoiceStatus.PAID) {
-          throw new ConflictException('This subscription invoice is already paid');
-        }
-        const payment = await tx.platformPayment.create({
-          data: {
-            tenantId: invoice.tenantId,
-            invoiceId,
-            amountMinor: dto.amountMinor,
-            method: dto.method,
-            idempotencyKey: dto.idempotencyKey,
-            recordedBy: adminId,
-            reference: dto.reference,
-            notes: dto.notes,
-          },
-        });
-        await tx.platformInvoice.update({
-          where: { id: invoiceId },
-          data: { status: PlatformInvoiceStatus.PAID, paidAt: new Date() },
-        });
-        return payment;
+          if (dto.amountMinor !== invoice.amountMinor) {
+            throw new BadRequestException('Payment amount must exactly match the invoice balance');
+          }
+          const existing = await tx.platformPayment.findUnique({
+            where: { idempotencyKey: dto.idempotencyKey },
+          });
+          if (existing) {
+            if (existing.invoiceId !== invoiceId || existing.amountMinor !== dto.amountMinor) {
+              throw new ConflictException('Idempotency key was already used for a different payment');
+            }
+            return existing;
+          }
+          if (invoice.status === PlatformInvoiceStatus.PAID) {
+            throw new ConflictException('This subscription invoice is already paid');
+          }
+          const payment = await tx.platformPayment.create({
+            data: {
+              tenantId: invoice.tenantId,
+              invoiceId,
+              amountMinor: dto.amountMinor,
+              method: dto.method,
+              idempotencyKey: dto.idempotencyKey,
+              recordedBy: adminId,
+              reference: dto.reference,
+              notes: dto.notes,
+            },
+          });
+          await tx.platformInvoice.update({
+            where: { id: invoiceId },
+            data: { status: PlatformInvoiceStatus.PAID, paidAt: new Date() },
+          });
+          return payment;
         });
         return result;
       } catch (error) {

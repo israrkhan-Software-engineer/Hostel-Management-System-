@@ -239,28 +239,88 @@ export class AdmissionsService {
     admissionId: string,
   ) {
     await this.residents.ensureBranch(tenantId, branchId);
-    const result = await this.prisma.admission.updateMany({
-      where: {
-        id: admissionId,
-        tenantId,
-        branchId,
-        status: 'PENDING',
-        deletedAt: null,
-      },
-      data: {
-        status: 'CANCELLED',
-        decidedByUserId: actorUserId,
-        decidedAt: new Date(),
-      },
-    });
-    if (result.count !== 1) {
-      const current = await this.prisma.admission.findFirst({
+
+    const result = await this.prisma.$transaction(async (tx) => {
+      const current = await tx.admission.findFirst({
         where: { id: admissionId, tenantId, branchId, deletedAt: null },
-        select: { id: true },
+        select: { id: true, status: true, residentId: true },
       });
       if (!current) throw new NotFoundException('Admission not found');
-      throw new ConflictException('Only pending admissions can be cancelled');
-    }
+      if (!['PENDING', 'APPROVED'].includes(current.status)) {
+        throw new ConflictException('Only pending or approved admissions can be cancelled');
+      }
+
+      const activeAllocation = await tx.bedAllocation.findFirst({
+        where: {
+          admissionId,
+          tenantId,
+          branchId,
+          endedAt: null,
+          status: 'RESERVED',
+        },
+        select: { id: true, bedId: true },
+      });
+
+      if (activeAllocation) {
+        const released = await tx.bed.updateMany({
+          where: {
+            id: activeAllocation.bedId,
+            tenantId,
+            branchId,
+            status: 'RESERVED',
+            deletedAt: null,
+          },
+          data: { status: 'AVAILABLE' },
+        });
+        if (released.count !== 1) {
+          throw new ConflictException('The reserved bed could not be released');
+        }
+        const closed = await tx.bedAllocation.updateMany({
+          where: {
+            id: activeAllocation.id,
+            tenantId,
+            branchId,
+            endedAt: null,
+          },
+          data: {
+            status: 'ENDED',
+            endedAt: new Date(),
+          },
+        });
+        if (closed.count !== 1) {
+          throw new ConflictException('The reserved allocation could not be closed');
+        }
+      }
+
+      const update = await tx.admission.updateMany({
+        where: {
+          id: admissionId,
+          tenantId,
+          branchId,
+          status: { in: ['PENDING', 'APPROVED'] },
+          deletedAt: null,
+        },
+        data: {
+          status: 'CANCELLED',
+          decidedByUserId: actorUserId,
+          decidedAt: new Date(),
+        },
+      });
+      if (update.count !== 1) {
+        throw new ConflictException('Admission state changed before cancellation was recorded');
+      }
+
+      return tx.admission.findFirstOrThrow({
+        where: { id: admissionId, tenantId, branchId, deletedAt: null },
+        include: {
+          resident: true,
+          allocations: {
+            where: { endedAt: null },
+            include: { bed: { include: { room: true } } },
+          },
+        },
+      });
+    });
 
     await this.audit.log({
       tenantId,
@@ -272,7 +332,7 @@ export class AdmissionsService {
       entityId: admissionId,
       outcome: 'success',
     });
-    return this.get(tenantId, branchId, admissionId);
+    return this.presentAdmission(result);
   }
 
   async availableBeds(tenantId: string, branchId: string) {

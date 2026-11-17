@@ -73,6 +73,13 @@ const studentTabs: Array<{ id: StudentTab; label: string }> = [
   { id: 'services', label: 'Student services' },
 ];
 
+function studentLoginPath() {
+  const slug = typeof window === 'undefined'
+    ? ''
+    : new URLSearchParams(window.location.search).get('hostel')?.trim() ?? '';
+  return slug ? `/student-login?hostel=${encodeURIComponent(slug)}` : '/student-login';
+}
+
 function currentMonday() {
   const date = new Date();
   const day = date.getDay();
@@ -136,7 +143,7 @@ export default function StudentPortal() {
       const current = await apiRequest<Profile>('/auth/profile');
       if (!active) return;
       if (!current.ok) {
-        if (current.status === 401) router.replace('/login');
+        if (current.status === 401) router.replace(studentLoginPath());
         else setError(current.message);
         setLoading(false);
         return;
@@ -184,7 +191,7 @@ export default function StudentPortal() {
 
     const responses = [residentResponse, menuResponse, complaintResponse, noticeResponse, invoiceResponse];
     if (responses.some((response) => !response.ok && response.status === 401)) {
-      router.replace('/login');
+      router.replace(studentLoginPath());
       setLoading(false);
       return;
     }
@@ -245,7 +252,7 @@ export default function StudentPortal() {
           continue;
         }
         if (response.status === 401) {
-          router.replace('/login');
+          router.replace(studentLoginPath());
           break;
         }
         if (response.status === 0 || response.status >= 500) break;
@@ -309,7 +316,7 @@ export default function StudentPortal() {
     setSavingProfile(false);
     if (!response.ok) {
       if (response.status === 401) {
-        router.replace('/login');
+        router.replace(studentLoginPath());
         return;
       }
       setError(response.message);
@@ -373,7 +380,7 @@ export default function StudentPortal() {
     setSubmitting(false);
     if (!response.ok) {
       if (response.status === 401) {
-        router.replace('/login');
+        router.replace(studentLoginPath());
         return;
       }
       if (response.status === 0 || response.status >= 500) {
@@ -464,7 +471,7 @@ export default function StudentPortal() {
     setPaymentSubmittingId('');
     if (!response.ok) {
       if (response.status === 401) {
-        router.replace('/login');
+        router.replace(studentLoginPath());
         return;
       }
       setError(response.message);
@@ -485,7 +492,7 @@ export default function StudentPortal() {
     setDownloadingPaymentId('');
     if (!response.ok) {
       if (response.status === 401) {
-        router.replace('/login');
+        router.replace(studentLoginPath());
         return;
       }
       setError(response.message);
@@ -534,7 +541,7 @@ export default function StudentPortal() {
       return;
     }
     setAccessToken(null);
-    router.replace('/login');
+    router.replace(studentLoginPath());
   }
 
   if (loading && !profile) return <main className="workspace-loading" aria-live="polite">Loading your student portal…</main>;

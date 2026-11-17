@@ -2,11 +2,12 @@ import { Module } from '@nestjs/common';
 import { AuditModule } from '../audit/audit.module';
 import { RolesModule } from '../roles/roles.module';
 import { NotificationsModule } from '../notifications/notifications.module';
+import { BusinessPoliciesModule } from '../business-policies/business-policies.module';
 import { HostelServicesController } from './hostel-services.controller';
 import { HostelServicesService } from './hostel-services.service';
 
 @Module({
-  imports: [AuditModule, RolesModule, NotificationsModule],
+  imports: [AuditModule, RolesModule, NotificationsModule, BusinessPoliciesModule],
   controllers: [HostelServicesController],
   providers: [HostelServicesService],
 })

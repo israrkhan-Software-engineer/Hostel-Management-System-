@@ -1,6 +1,7 @@
 'use client';
 
 import { FormEvent, useState } from 'react';
+import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import Image from 'next/image';
 import QRCode from 'qrcode';
@@ -173,7 +174,7 @@ export default function PlatformAdminLoginPage() {
             </button>
           </>
         )}
-        <a className="quiet-link" href="/">Return to public page</a>
+        <Link className="quiet-link" href="/">Return to public page</Link>
       </form>
     </main>
   );

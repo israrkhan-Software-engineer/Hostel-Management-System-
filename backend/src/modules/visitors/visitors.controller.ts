@@ -3,7 +3,7 @@ import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import { BranchScoped } from '../../common/decorators/branch-scoped.decorator';
 import { CurrentUser, RequestUser } from '../../common/decorators/current-user.decorator';
 import { RequirePermission } from '../../common/decorators/require-permission.decorator';
-import { CreateVisitorVisitDto } from './visitors.dto';
+import { CheckInVisitorDto, CreateVisitorVisitDto } from './visitors.dto';
 import { VisitorsService } from './visitors.service';
 
 @ApiTags('gate operations')
@@ -69,8 +69,9 @@ export class VisitorsController {
     @Param('branchId', ParseUUIDPipe) branchId: string,
     @Param('visitId', ParseUUIDPipe) visitId: string,
     @CurrentUser() user: RequestUser,
+    @Body() overrideDto?: CheckInVisitorDto,
   ) {
-    return this.phase5.checkInVisitor(user.tenantId, branchId, user.userId, visitId);
+    return this.phase5.checkInVisitor(user.tenantId, branchId, user.userId, visitId, overrideDto);
   }
 
   @Post('visitors/:visitId/check-out')

@@ -1,11 +1,13 @@
+import Link from 'next/link';
+
 export default function HomePage() {
   return (
     <main className="public-page">
       <header className="public-header">
-        <a className="brand-lockup" href="/">HMS <span>Hostel Management</span></a>
+        <Link className="brand-lockup" href="/">HMS <span>Hostel Management</span></Link>
         <div style={{ display: 'flex', gap: '12px', alignItems: 'center' }}>
-          <a className="button secondary" href="/login">Staff sign in</a>
-          <a className="button secondary" href="/student-login?hostel=sunrise-hostel">Student Login</a>
+          <Link className="button secondary" href="/login">Staff sign in</Link>
+          <Link className="button secondary" href="/student-login">Student Login</Link>
         </div>
       </header>
       <section className="public-hero">
@@ -13,9 +15,9 @@ export default function HomePage() {
         <h1>Hostel operations,<br /><span>all in one place.</span></h1>
         <p>Manage admissions, resident records, rooms, and bed occupancy with one secure workspace.</p>
         <div className="hero-actions">
-          <a className="button primary" href="/login">Staff sign in</a>
-          <a className="button secondary" href="/student-login?hostel=sunrise-hostel">Student Login</a>
-          <a className="quiet-link" href="#features">Explore the platform</a>
+          <Link className="button primary" href="/login">Staff sign in</Link>
+          <Link className="button secondary" href="/student-login">Student Login</Link>
+          <Link className="quiet-link" href="#features">Explore the platform</Link>
         </div>
       </section>
       <section id="features" className="public-features">

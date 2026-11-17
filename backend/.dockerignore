@@ -1,6 +1,13 @@
 node_modules
 dist
+.git
+.gitignore
 .env
 .env.*
 coverage
 *.log
+*.tsbuildinfo
+test
+**/*.spec.ts
+**/*.spec.tsx
+**/__mocks__

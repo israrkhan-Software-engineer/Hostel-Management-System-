@@ -1,6 +1,7 @@
 'use client';
 
 import { FormEvent, useCallback, useEffect, useState } from 'react';
+import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { apiRequest, getAccessToken, setAccessToken } from '@/lib/api/client';
 import SaasManagementPanel from './saas-management-panel';
@@ -368,7 +369,7 @@ export default function PlatformAdminWorkspace() {
   return (
     <main className="platform-page">
       <header className="platform-header">
-        <a className="platform-brand" href="/system-admin">HMS <span>PLATFORM</span></a>
+        <Link className="platform-brand" href="/system-admin">HMS <span>PLATFORM</span></Link>
         <div className="platform-header-actions">
           <span>Super administrator</span>
           <button type="button" className="button secondary small" onClick={logout}>Sign out</button>

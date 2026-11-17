@@ -113,13 +113,21 @@ describe('AdmissionsService', () => {
   });
 
   it('cancels only pending admissions and records the actor', async () => {
-    prisma.admission.updateMany.mockResolvedValue({ count: 1 });
-    jest.spyOn(service, 'get').mockResolvedValue({ id: 'admission-1', status: 'CANCELLED' } as any);
+    const tx = {
+      admission: {
+        findFirst: jest.fn().mockResolvedValue({ id: 'admission-1', status: 'PENDING', residentId: 'resident-1' }),
+        updateMany: jest.fn().mockResolvedValue({ count: 1 }),
+        findFirstOrThrow: jest.fn().mockResolvedValue({ id: 'admission-1', resident: { id: 'resident-1' } }),
+      },
+      bedAllocation: { findFirst: jest.fn().mockResolvedValue(null) },
+      bed: { updateMany: jest.fn() },
+    };
+    prisma.$transaction.mockImplementation((work: (client: typeof tx) => unknown) => work(tx));
 
     await service.cancel('tenant-1', 'branch-1', 'user-1', 'admission-1');
 
-    expect(prisma.admission.updateMany).toHaveBeenCalledWith(expect.objectContaining({
-      where: expect.objectContaining({ status: 'PENDING', deletedAt: null }),
+    expect(tx.admission.updateMany).toHaveBeenCalledWith(expect.objectContaining({
+      where: expect.objectContaining({ status: { in: ['PENDING', 'APPROVED'] }, deletedAt: null }),
       data: expect.objectContaining({
         status: 'CANCELLED',
         decidedByUserId: 'user-1',
@@ -129,6 +137,35 @@ describe('AdmissionsService', () => {
     expect(audit.log).toHaveBeenCalledWith(expect.objectContaining({
       action: 'admission.cancel',
       actorUserId: 'user-1',
+    }));
+  });
+
+  it('releases a reserved bed when cancelling an approved admission', async () => {
+    const tx = {
+      admission: {
+        findFirst: jest.fn().mockResolvedValue({ id: 'admission-1', status: 'APPROVED', residentId: 'resident-1' }),
+        updateMany: jest.fn().mockResolvedValue({ count: 1 }),
+        findFirstOrThrow: jest.fn().mockResolvedValue({ id: 'admission-1', resident: { id: 'resident-1' } }),
+      },
+      bedAllocation: {
+        findFirst: jest.fn().mockResolvedValue({ id: 'allocation-1', bedId: 'bed-1' }),
+        updateMany: jest.fn().mockResolvedValue({ count: 1 }),
+      },
+      bed: {
+        updateMany: jest.fn().mockResolvedValue({ count: 1 }),
+      },
+    };
+    prisma.$transaction.mockImplementation((work: (client: typeof tx) => unknown) => work(tx));
+
+    await service.cancel('tenant-1', 'branch-1', 'user-1', 'admission-1');
+
+    expect(tx.bed.updateMany).toHaveBeenCalledWith(expect.objectContaining({
+      where: expect.objectContaining({ id: 'bed-1', status: 'RESERVED' }),
+      data: { status: 'AVAILABLE' },
+    }));
+    expect(tx.bedAllocation.updateMany).toHaveBeenCalledWith(expect.objectContaining({
+      where: expect.objectContaining({ id: 'allocation-1', endedAt: null }),
+      data: expect.objectContaining({ status: 'ENDED', endedAt: expect.any(Date) }),
     }));
   });
 

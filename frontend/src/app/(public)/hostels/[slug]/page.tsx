@@ -1,6 +1,7 @@
 'use client';
 
 import { useEffect, useState } from 'react';
+import Link from 'next/link';
 import { useParams } from 'next/navigation';
 import { apiRequest } from '@/lib/api/client';
 
@@ -38,10 +39,10 @@ export default function PublicHostelPage() {
   return (
     <main className="public-page">
       <header className="public-header">
-        <a className="brand-lockup" href="/">HMS <span>Hostel Management</span></a>
+        <Link className="brand-lockup" href="/">HMS <span>Hostel Management</span></Link>
         <div className="button-row">
-          <a className="button secondary" href="/login">Staff sign in</a>
-          <a className="button secondary" href={`/student-login?hostel=${encodeURIComponent(slug)}`}>Student Login</a>
+          <Link className="button secondary" href="/login">Staff sign in</Link>
+          <Link className="button secondary" href={`/student-login?hostel=${encodeURIComponent(slug)}`}>Student Login</Link>
         </div>
       </header>
       <section className="hostel-hero">

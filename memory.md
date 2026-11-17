@@ -1,6 +1,10 @@
 # memory.md — HMS Session Handoff
 
-**Last updated:** 2026-11-10 (Phase 5 performance and storage implementation)
+## Current handoff — 2026-11-17 (infrastructure configuration)
+
+Repository-local runtime configuration is now hardened for deployment preparation: production Nginx/TLS proxying and rate limits, one-shot migration job, production Compose overlay, non-root Nginx, pinned image tags, stronger env preflight, authenticated Redis/SeaweedFS local object storage, dependency readiness, and worker health/tenant-namespaced BullMQ IDs. API containers no longer receive the migration connection string. The production overlay requires externally supplied TLS files and HTTPS S3-compatible storage; no deployment or automated tests were run. See `progress.md` and `gap.md` for exact scope and external blockers.
+
+**Last updated:** 2026-11-17 (infrastructure configuration)
 
 ## Current handoff — 2026-11-10
 

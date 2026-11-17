@@ -1,6 +1,7 @@
 'use client';
 
 import { FormEvent, useState } from 'react';
+import Link from 'next/link';
 import { useSearchParams } from 'next/navigation';
 import { apiRequest } from '../lib/api/client';
 
@@ -35,7 +36,7 @@ export function PasswordResetRequestForm() {
         {error && <p className="form-error" role="alert">{error}</p>}
         {message && <p className="notice success" role="status">{message}</p>}
         <button className="button primary full-width" type="submit" disabled={busy}>{busy ? 'Sending…' : 'Send reset link'}</button>
-        <a className="quiet-link" href="/login">Return to sign in</a>
+        <Link className="quiet-link" href="/login">Return to sign in</Link>
       </form>
     </main>
   );
@@ -72,7 +73,7 @@ export function PasswordResetCompletionForm() {
         {error && <p className="form-error" role="alert">{error}</p>}
         {message && <p className="notice success" role="status">{message}</p>}
         {!message && <button className="button primary full-width" type="submit" disabled={busy || !token}>{busy ? 'Updating…' : 'Update password'}</button>}
-        <a className="quiet-link" href="/login">Return to sign in</a>
+        <Link className="quiet-link" href="/login">Return to sign in</Link>
       </form>
     </main>
   );

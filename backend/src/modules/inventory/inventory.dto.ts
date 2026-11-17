@@ -1,4 +1,6 @@
+import { BedStatus } from '@prisma/client';
 import {
+  IsEnum,
   IsInt,
   IsOptional,
   IsString,
@@ -99,4 +101,9 @@ export class UpdateBedDto {
   @MinLength(1)
   @MaxLength(30)
   code?: string;
+}
+
+export class UpdateBedStatusDto {
+  @IsEnum(BedStatus)
+  status!: BedStatus;
 }

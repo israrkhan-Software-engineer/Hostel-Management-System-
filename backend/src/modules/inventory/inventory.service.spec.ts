@@ -1,4 +1,4 @@
-import { ConflictException } from '@nestjs/common';
+import { BadRequestException, ConflictException } from '@nestjs/common';
 import { validate } from 'class-validator';
 import { CreateRoomDto } from './inventory.dto';
 import { InventoryService } from './inventory.service';
@@ -14,7 +14,13 @@ describe('InventoryService', () => {
       building: { create: jest.fn(), findMany: jest.fn(), findFirst: jest.fn() },
       floor: { create: jest.fn(), findFirst: jest.fn() },
       room: { create: jest.fn(), findMany: jest.fn(), findFirst: jest.fn(), findFirstOrThrow: jest.fn(), updateMany: jest.fn() },
-      bed: { findMany: jest.fn(), count: jest.fn() },
+      bed: {
+        findMany: jest.fn(),
+        findFirst: jest.fn(),
+        findFirstOrThrow: jest.fn(),
+        count: jest.fn(),
+        updateMany: jest.fn(),
+      },
       bedAllocation: { findFirst: jest.fn() },
       $transaction: jest.fn(),
     };
@@ -61,6 +67,45 @@ describe('InventoryService', () => {
       data: { tenantId: 'tenant-1', branchId: 'branch-1', roomId: 'room-1', code: 'A' },
     }));
     expect(result).toEqual({ id: 'bed-1', code: 'A' });
+  });
+
+  it('rejects whitespace-only inventory identifiers before opening a transaction', async () => {
+    await expect(service.createBed('tenant-1', 'branch-1', 'user-1', {
+      roomId: 'room-1',
+      code: '   ',
+    })).rejects.toThrow(BadRequestException);
+
+    await expect(service.createRoom('tenant-1', 'branch-1', 'user-1', {
+      floorId: 'floor-1',
+      code: '   ',
+      bedCapacity: 1,
+    })).rejects.toThrow(BadRequestException);
+    expect(prisma.$transaction).not.toHaveBeenCalled();
+  });
+
+  it('counts only active beds in inventory list relations', async () => {
+    prisma.building.findMany.mockResolvedValue([]);
+    prisma.room.findMany.mockResolvedValue([]);
+
+    await service.listBuildings('tenant-1', 'branch-1');
+    await service.listRooms('tenant-1', 'branch-1');
+
+    expect(prisma.building.findMany).toHaveBeenCalledWith(expect.objectContaining({
+      include: expect.objectContaining({
+        floors: expect.objectContaining({
+          include: expect.objectContaining({
+            rooms: expect.objectContaining({
+              include: { _count: { select: { beds: { where: { deletedAt: null } } } } },
+            }),
+          }),
+        }),
+      }),
+    }));
+    expect(prisma.room.findMany).toHaveBeenCalledWith(expect.objectContaining({
+      include: expect.objectContaining({
+        _count: { select: { beds: { where: { deletedAt: null } } } },
+      }),
+    }));
   });
 
   it('prevents creating beds beyond room capacity', async () => {
@@ -143,5 +188,22 @@ describe('InventoryService', () => {
       .rejects.toThrow(ConflictException);
     expect(tx.bedAllocation.findFirst).not.toHaveBeenCalled();
     expect(tx.bed.updateMany).not.toHaveBeenCalled();
+  });
+
+  it('allows toggling a bed between available and out-of-service only when it is idle', async () => {
+    prisma.bed.findFirst.mockResolvedValue({ id: 'bed-1', status: 'AVAILABLE' });
+    prisma.bedAllocation.findFirst.mockResolvedValue(null);
+    prisma.bed.updateMany.mockResolvedValue({ count: 1 });
+    prisma.bed.findFirstOrThrow.mockResolvedValue({ id: 'bed-1', status: 'OUT_OF_SERVICE', room: { id: 'room-1', code: 'A1' } });
+
+    await expect(service.updateBedStatus('tenant-1', 'branch-1', 'user-1', 'bed-1', 'OUT_OF_SERVICE'))
+      .resolves.toMatchObject({ id: 'bed-1', status: 'OUT_OF_SERVICE' });
+
+    prisma.bed.findFirst.mockResolvedValue({ id: 'bed-1', status: 'OUT_OF_SERVICE' });
+    prisma.bedAllocation.findFirst.mockResolvedValue(null);
+    prisma.bed.findFirstOrThrow.mockResolvedValue({ id: 'bed-1', status: 'AVAILABLE', room: { id: 'room-1', code: 'A1' } });
+
+    await expect(service.updateBedStatus('tenant-1', 'branch-1', 'user-1', 'bed-1', 'AVAILABLE'))
+      .resolves.toMatchObject({ id: 'bed-1', status: 'AVAILABLE' });
   });
 });

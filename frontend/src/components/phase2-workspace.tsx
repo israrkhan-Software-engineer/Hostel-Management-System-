@@ -787,7 +787,7 @@ export default function Phase2Workspace() {
     if (!financeReport) return;
     const csvCell = (value: string | number) => {
       const raw = String(value);
-      const safe = /^[=+\-@\t\r]/.test(raw) ? `'${raw}` : raw;
+      const safe = /^[\s\uFEFF]*[=+\-@]/.test(raw) ? `'${raw}` : raw;
       return `"${safe.replace(/"/g, '""')}"`;
     };
     const rows = [

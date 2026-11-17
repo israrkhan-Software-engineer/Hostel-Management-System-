@@ -32,6 +32,7 @@ import {
 } from './platform-admin.dto';
 import { PlatformMfaEnrollmentDto } from './platform-auth.dto';
 import { SaasService } from './saas.service';
+import { BusinessPoliciesService } from '../business-policies/business-policies.service';
 import {
   AssignSubscriptionDto,
   ChangeSubscriptionStatusDto,
@@ -53,6 +54,7 @@ export class PlatformAdminController {
     private readonly auth: PlatformAuthService,
     private readonly platform: PlatformAdminService,
     private readonly saas: SaasService,
+    private readonly businessPolicies: BusinessPoliciesService,
   ) {}
 
   @Post('auth/login')
@@ -267,6 +269,20 @@ export class PlatformAdminController {
   @ApiBearerAuth()
   listAudit(@Req() request: PlatformRequest, @Query() filter: PlatformPaginationDto) {
     return this.platform.listAuditLogs(this.adminId(request), filter);
+  }
+
+  @Get('business-policies/pending')
+  @UseGuards(PlatformAdminGuard)
+  @ApiBearerAuth()
+  listPendingBusinessPolicies(@Req() request: PlatformRequest) {
+    return this.platform.listPendingBusinessPolicies(this.adminId(request));
+  }
+
+  @Get('tenants/:tenantId/business-policies')
+  @UseGuards(PlatformAdminGuard)
+  @ApiBearerAuth()
+  getTenantBusinessPolicies(@Param('tenantId', ParseUUIDPipe) tenantId: string) {
+    return this.businessPolicies.getTenantPolicies(tenantId);
   }
 
   private adminId(request: PlatformRequest): string {

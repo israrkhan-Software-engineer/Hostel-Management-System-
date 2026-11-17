@@ -38,10 +38,17 @@ async function bootstrap() {
     SwaggerModule.setup('api/docs', app, document);
   }
 
-  // CORS — restrict in production to known origins (🟡 origins to be configured)
+  const corsOrigins = (process.env.CORS_ORIGINS ?? '')
+    .split(',')
+    .map((origin) => origin.trim())
+    .filter(Boolean);
+  if (process.env.NODE_ENV === 'production' && corsOrigins.length === 0) {
+    throw new Error('CORS_ORIGINS must contain at least one trusted origin in production.');
+  }
+
   app.enableCors({
     origin: process.env.NODE_ENV === 'production'
-      ? (process.env.CORS_ORIGINS ?? '').split(',')
+      ? corsOrigins
       : true,
     credentials: true,
   });

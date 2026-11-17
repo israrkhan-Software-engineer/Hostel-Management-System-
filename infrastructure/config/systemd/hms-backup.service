@@ -1,0 +1,20 @@
+[Unit]
+Description=Hostel Management System Automated Encrypted Backup
+Documentation=file:///d:/Office work/Hostel mangement system/Hostel Mangement system/HMS_Phase1/hms/infrastructure/docs/DISASTER_RECOVERY_RUNBOOK.md
+After=docker.service network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=root
+WorkingDirectory=/opt/hms
+EnvironmentFile=-/opt/hms/.env
+ExecStart=/opt/hms/infrastructure/scripts/backup.sh
+StandardOutput=append:/var/backups/hms/backup.log
+StandardError=append:/var/backups/hms/backup.log
+PrivateTmp=true
+ProtectSystem=strict
+ReadWritePaths=/var/backups/hms
+
+[Install]
+WantedBy=multi-user.target

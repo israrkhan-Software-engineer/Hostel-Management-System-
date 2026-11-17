@@ -24,6 +24,8 @@ describe('ResidentsService', () => {
         update: jest.fn(),
         updateMany: jest.fn(),
       },
+      admission: { findFirst: jest.fn().mockResolvedValue(null) },
+      invoice: { findFirst: jest.fn().mockResolvedValue(null) },
       user: { findFirst: jest.fn() },
       bedAllocation: { findFirst: jest.fn().mockResolvedValue(null) },
     };
@@ -135,9 +137,37 @@ describe('ResidentsService', () => {
     });
   });
 
+  it('rejects resident detail or mutation requests for inactive or unknown branches', async () => {
+    prisma.branch.findFirst.mockResolvedValue(null);
+
+    await expect(service.get('tenant-1', 'branch-1', 'resident-1')).rejects.toThrow('Branch not found');
+    await expect(service.update('tenant-1', 'branch-1', 'user-1', 'resident-1', { firstName: 'Amina' })).rejects.toThrow('Branch not found');
+    await expect(service.deactivate('tenant-1', 'branch-1', 'user-1', 'resident-1')).rejects.toThrow('Branch not found');
+
+    expect(prisma.resident.findFirst).not.toHaveBeenCalled();
+    expect(prisma.resident.update).not.toHaveBeenCalled();
+  });
+
   it('does not deactivate a resident who still has an active bed allocation', async () => {
     prisma.resident.findFirst.mockResolvedValue({ id: 'resident-1' });
     prisma.bedAllocation.findFirst.mockResolvedValue({ id: 'allocation-1' });
+
+    await expect(
+      service.deactivate('tenant-1', 'branch-1', 'user-1', 'resident-1'),
+    ).rejects.toThrow(ConflictException);
+    expect(prisma.resident.update).not.toHaveBeenCalled();
+  });
+
+  it('blocks deactivation while an active admission or outstanding invoice still exists', async () => {
+    prisma.resident.findFirst.mockResolvedValue({ id: 'resident-1' });
+    prisma.admission.findFirst.mockResolvedValue({ id: 'admission-1' });
+
+    await expect(
+      service.deactivate('tenant-1', 'branch-1', 'user-1', 'resident-1'),
+    ).rejects.toThrow(ConflictException);
+
+    prisma.admission.findFirst.mockResolvedValue(null);
+    prisma.invoice.findFirst.mockResolvedValue({ id: 'invoice-1' });
 
     await expect(
       service.deactivate('tenant-1', 'branch-1', 'user-1', 'resident-1'),

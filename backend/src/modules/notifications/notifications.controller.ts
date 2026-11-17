@@ -1,9 +1,30 @@
 import { Body, Controller, Get, Param, ParseUUIDPipe, Patch, Post, Query } from '@nestjs/common';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
-import { IsBoolean, IsOptional } from 'class-validator';
+import { Transform, Type } from 'class-transformer';
+import { IsBoolean, IsOptional, IsInt, Min, Max } from 'class-validator';
 import { CurrentUser, RequestUser } from '../../common/decorators/current-user.decorator';
 import { RequirePermission } from '../../common/decorators/require-permission.decorator';
 import { NotificationsService } from './notifications.service';
+
+class NotificationListQueryDto {
+  @Transform(({ value }) => (value === undefined || value === null || value === '' ? 1 : Number(value)))
+  @Type(() => Number)
+  @IsInt()
+  @Min(1)
+  page = 1;
+
+  @Transform(({ value }) => (value === undefined || value === null || value === '' ? 25 : Number(value)))
+  @Type(() => Number)
+  @IsInt()
+  @Min(1)
+  @Max(100)
+  pageSize = 25;
+
+  @Transform(({ value }) => value === 'true')
+  @IsOptional()
+  @IsBoolean()
+  unreadOnly?: boolean;
+}
 
 class UpdateNotificationPreferenceDto {
   @IsOptional()
@@ -27,8 +48,8 @@ export class NotificationsController {
 
   @Get()
   @RequirePermission('notifications', 'view')
-  list(@CurrentUser() user: RequestUser, @Query('unreadOnly') unreadOnly?: string) {
-    return this.notifications.list(user.tenantId, user.userId, unreadOnly === 'true');
+  list(@CurrentUser() user: RequestUser, @Query() query: NotificationListQueryDto) {
+    return this.notifications.list(user.tenantId, user.userId, query.unreadOnly ?? false, query.page, query.pageSize);
   }
 
   @Post('read-all')

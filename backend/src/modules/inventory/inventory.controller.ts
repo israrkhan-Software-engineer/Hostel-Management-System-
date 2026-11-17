@@ -19,6 +19,7 @@ import {
   CreateFloorDto,
   CreateRoomDto,
   UpdateBedDto,
+  UpdateBedStatusDto,
   UpdateBuildingDto,
   UpdateFloorDto,
   UpdateRoomDto,
@@ -170,6 +171,17 @@ export class InventoryController {
     @Body() dto: UpdateBedDto,
   ) {
     return this.inventory.updateBed(user.tenantId, branchId, user.userId, bedId, dto);
+  }
+
+  @Patch('beds/:bedId/status')
+  @RequirePermission('inventory', 'edit')
+  updateBedStatus(
+    @Param('branchId', ParseUUIDPipe) branchId: string,
+    @Param('bedId', ParseUUIDPipe) bedId: string,
+    @CurrentUser() user: RequestUser,
+    @Body() dto: UpdateBedStatusDto,
+  ) {
+    return this.inventory.updateBedStatus(user.tenantId, branchId, user.userId, bedId, dto.status);
   }
 
   @Delete('beds/:bedId')

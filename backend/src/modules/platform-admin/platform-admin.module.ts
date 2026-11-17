@@ -1,6 +1,7 @@
 import { Module } from '@nestjs/common';
 import { ConfigModule, ConfigService } from '@nestjs/config';
 import { JwtModule } from '@nestjs/jwt';
+import { BusinessPoliciesModule } from '../business-policies/business-policies.module';
 import { PlatformAdminController } from './platform-admin.controller';
 import { PlatformAdminGuard } from './platform-admin.guard';
 import { PlatformAdminService } from './platform-admin.service';
@@ -9,6 +10,7 @@ import { SaasService } from './saas.service';
 
 @Module({
   imports: [
+    BusinessPoliciesModule,
     JwtModule.registerAsync({
       imports: [ConfigModule],
       inject: [ConfigService],

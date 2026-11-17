@@ -6,11 +6,12 @@
 services:
   # ── Reverse proxy ────────────────────────────────────────────────────────────
   nginx:
-    image: nginx:${NGINX_VERSION}
+    image: nginxinc/nginx-unprivileged:${NGINX_VERSION:-1.27.4-alpine}
     ports:
-      - "127.0.0.1:8080:80"
+      - "127.0.0.1:8080:8080"
     volumes:
       - ./config/nginx.dev.conf:/etc/nginx/nginx.conf:ro
+      - ./config/nginx.api-proxy.conf:/etc/nginx/hms-api-proxy.conf:ro
     depends_on:
       frontend:
         condition: service_healthy
@@ -19,6 +20,11 @@ services:
     networks:
       - hms-net
     restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:8080/"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
 
   # ── Next.js PWA frontend ──────────────────────────────────────────────────
   frontend:
@@ -39,30 +45,31 @@ services:
       context: ./backend
       dockerfile: Dockerfile
     environment:
-      NODE_ENV: production
+      NODE_ENV: ${NODE_ENV:-development}
       API_RATE_LIMIT_PER_MINUTE: ${API_RATE_LIMIT_PER_MINUTE:-10000}
       AUTH_LOGIN_MAX_ATTEMPTS: ${AUTH_LOGIN_MAX_ATTEMPTS:-5}
       AUTH_LOGIN_LOCKOUT_MINUTES: ${AUTH_LOGIN_LOCKOUT_MINUTES:-15}
       TENANT_MFA_ENABLED: ${TENANT_MFA_ENABLED:-true}
-      DATABASE_URL: postgresql://hms_app:${HMS_APP_PASSWORD}@postgres:5432/${POSTGRES_DB}?schema=public
-      DATABASE_MIGRATION_URL: ${DATABASE_MIGRATION_URL:-postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}?schema=public}
+      DATABASE_URL: postgresql://hms_app:${HMS_APP_PASSWORD:?HMS_APP_PASSWORD must be set}@postgres:5432/${POSTGRES_DB:?POSTGRES_DB must be set}?schema=public
+      DATABASE_MIGRATION_URL: ${DATABASE_MIGRATION_URL:?DATABASE_MIGRATION_URL must be set}
       DATABASE_POOL_MAX: ${DATABASE_POOL_MAX:-10}
-      REDIS_URL: ${REDIS_URL}
-      JWT_SECRET: ${JWT_SECRET}
-      PLATFORM_JWT_SECRET: ${PLATFORM_JWT_SECRET}
-      JWT_ACCESS_EXPIRY: ${JWT_ACCESS_EXPIRY}
-      JWT_REFRESH_EXPIRY: ${JWT_REFRESH_EXPIRY}
-      FIELD_ENCRYPTION_KEY: ${FIELD_ENCRYPTION_KEY}
+      REDIS_URL: redis://:${REDIS_PASSWORD:?REDIS_PASSWORD must be set}@redis:6379
+      JWT_SECRET: ${JWT_SECRET:?JWT_SECRET must be set}
+      PLATFORM_JWT_SECRET: ${PLATFORM_JWT_SECRET:?PLATFORM_JWT_SECRET must be set}
+      JWT_ACCESS_EXPIRY: ${JWT_ACCESS_EXPIRY:-15m}
+      JWT_REFRESH_EXPIRY: ${JWT_REFRESH_EXPIRY:-7d}
+      FIELD_ENCRYPTION_KEY: ${FIELD_ENCRYPTION_KEY:?FIELD_ENCRYPTION_KEY must be set}
       OBJECT_STORAGE_URL: http://object-storage:8333
-      OBJECT_STORAGE_ACCESS_KEY: ${OBJECT_STORAGE_ACCESS_KEY}
-      OBJECT_STORAGE_SECRET_KEY: ${OBJECT_STORAGE_SECRET_KEY}
+      OBJECT_STORAGE_ACCESS_KEY: ${OBJECT_STORAGE_ACCESS_KEY:?OBJECT_STORAGE_ACCESS_KEY must be set}
+      OBJECT_STORAGE_SECRET_KEY: ${OBJECT_STORAGE_SECRET_KEY:?OBJECT_STORAGE_SECRET_KEY must be set}
       OBJECT_STORAGE_REGION: ${OBJECT_STORAGE_REGION:-us-east-1}
       OBJECT_STORAGE_SSE: ${OBJECT_STORAGE_SSE:-}
-      OBJECT_STORAGE_AUTO_CREATE_BUCKET: ${OBJECT_STORAGE_AUTO_CREATE_BUCKET:-true}
+      OBJECT_STORAGE_AUTO_CREATE_BUCKET: ${OBJECT_STORAGE_AUTO_CREATE_BUCKET:-false}
       OBJECT_STORAGE_BUCKET_PRIVATE_PROOFS: ${OBJECT_STORAGE_BUCKET_PRIVATE_PROOFS:-private-proofs}
-      APP_TIMEZONE: ${APP_TIMEZONE}
-      APP_DEFAULT_CURRENCY: ${APP_DEFAULT_CURRENCY}
-      APP_FRONTEND_URL: ${APP_FRONTEND_URL:-http://localhost:3000}
+      APP_TIMEZONE: ${APP_TIMEZONE:-Asia/Karachi}
+      APP_DEFAULT_CURRENCY: ${APP_DEFAULT_CURRENCY:-PKR}
+      APP_FRONTEND_URL: ${APP_FRONTEND_URL:-http://localhost:8080}
+      CORS_ORIGINS: ${CORS_ORIGINS:?CORS_ORIGINS must be set}
       NOTIFICATION_EMAIL_PROVIDER: ${NOTIFICATION_EMAIL_PROVIDER:-}
       NOTIFICATION_EMAIL_API_KEY: ${NOTIFICATION_EMAIL_API_KEY:-}
       NOTIFICATION_EMAIL_FROM: ${NOTIFICATION_EMAIL_FROM:-}
@@ -78,43 +85,65 @@ services:
       redis:
         condition: service_healthy
       object-storage:
-        condition: service_started
-    command: ["sh", "-c", "npx prisma migrate deploy && node dist/src/main"]
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+    command: ["node", "dist/src/main"]
     networks:
       - hms-net
     restart: unless-stopped
     healthcheck:
-      test: ["CMD", "wget", "-qO-", "http://localhost:3001/api/health/ready"]
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3001/api/health/ready').then(r => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))"]
       interval: 30s
       timeout: 10s
       retries: 3
+      start_period: 45s
+
+  # Apply schema changes once before any API replica starts.
+  migrate:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+      target: migrator
+    environment:
+      DATABASE_MIGRATION_URL: ${DATABASE_MIGRATION_URL:?DATABASE_MIGRATION_URL must be set}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      database-role-setup:
+        condition: service_completed_successfully
+    networks:
+      - hms-net
+    restart: "no"
 
   # ── BullMQ worker ────────────────────────────────────────────────────────
   worker:
+    profiles: ["worker"]
     build:
       context: ./backend
       dockerfile: Dockerfile.worker
     environment:
-      NODE_ENV: production
-      DATABASE_URL: postgresql://hms_app:${HMS_APP_PASSWORD}@postgres:5432/${POSTGRES_DB}?schema=public
-      DATABASE_MIGRATION_URL: postgresql://hms_app:${HMS_APP_PASSWORD}@postgres:5432/${POSTGRES_DB}?schema=public
+      NODE_ENV: ${NODE_ENV:-development}
+      DATABASE_URL: postgresql://hms_app:${HMS_APP_PASSWORD:?HMS_APP_PASSWORD must be set}@postgres:5432/${POSTGRES_DB:?POSTGRES_DB must be set}?schema=public
+      DATABASE_MIGRATION_URL: ${DATABASE_MIGRATION_URL:?DATABASE_MIGRATION_URL must be set}
       DATABASE_POOL_MAX: ${DATABASE_POOL_MAX:-10}
-      REDIS_URL: ${REDIS_URL}
-      JWT_SECRET: ${JWT_SECRET}
-      PLATFORM_JWT_SECRET: ${PLATFORM_JWT_SECRET}
-      FIELD_ENCRYPTION_KEY: ${FIELD_ENCRYPTION_KEY}
+      REDIS_URL: redis://:${REDIS_PASSWORD:?REDIS_PASSWORD must be set}@redis:6379
+      JWT_SECRET: ${JWT_SECRET:?JWT_SECRET must be set}
+      PLATFORM_JWT_SECRET: ${PLATFORM_JWT_SECRET:?PLATFORM_JWT_SECRET must be set}
+      FIELD_ENCRYPTION_KEY: ${FIELD_ENCRYPTION_KEY:?FIELD_ENCRYPTION_KEY must be set}
       OBJECT_STORAGE_URL: http://object-storage:8333
-      OBJECT_STORAGE_ACCESS_KEY: ${OBJECT_STORAGE_ACCESS_KEY}
-      OBJECT_STORAGE_SECRET_KEY: ${OBJECT_STORAGE_SECRET_KEY}
+      OBJECT_STORAGE_ACCESS_KEY: ${OBJECT_STORAGE_ACCESS_KEY:?OBJECT_STORAGE_ACCESS_KEY must be set}
+      OBJECT_STORAGE_SECRET_KEY: ${OBJECT_STORAGE_SECRET_KEY:?OBJECT_STORAGE_SECRET_KEY must be set}
       OBJECT_STORAGE_REGION: ${OBJECT_STORAGE_REGION:-us-east-1}
       OBJECT_STORAGE_SSE: ${OBJECT_STORAGE_SSE:-}
-      OBJECT_STORAGE_AUTO_CREATE_BUCKET: ${OBJECT_STORAGE_AUTO_CREATE_BUCKET:-true}
+      OBJECT_STORAGE_AUTO_CREATE_BUCKET: ${OBJECT_STORAGE_AUTO_CREATE_BUCKET:-false}
       OBJECT_STORAGE_BUCKET_PRIVATE_PROOFS: ${OBJECT_STORAGE_BUCKET_PRIVATE_PROOFS:-private-proofs}
-      APP_TIMEZONE: ${APP_TIMEZONE}
-      APP_DEFAULT_CURRENCY: ${APP_DEFAULT_CURRENCY}
-      WORKER_CONCURRENCY: ${WORKER_CONCURRENCY}
+      APP_TIMEZONE: ${APP_TIMEZONE:-Asia/Karachi}
+      APP_DEFAULT_CURRENCY: ${APP_DEFAULT_CURRENCY:-PKR}
+      WORKER_CONCURRENCY: ${WORKER_CONCURRENCY:-4}
+      HMS_ENABLE_WORKER: ${HMS_ENABLE_WORKER:-false}
       PLATFORM_WORKER_ADMIN_EMAIL: ${PLATFORM_WORKER_ADMIN_EMAIL:-}
-      APP_FRONTEND_URL: ${APP_FRONTEND_URL:-http://localhost:3000}
+      APP_FRONTEND_URL: ${APP_FRONTEND_URL:-http://localhost:8080}
       NOTIFICATION_EMAIL_PROVIDER: ${NOTIFICATION_EMAIL_PROVIDER:-}
       NOTIFICATION_EMAIL_API_KEY: ${NOTIFICATION_EMAIL_API_KEY:-}
       NOTIFICATION_EMAIL_FROM: ${NOTIFICATION_EMAIL_FROM:-}
@@ -129,22 +158,25 @@ services:
         condition: service_healthy
       api:
         condition: service_healthy
+      object-storage:
+        condition: service_healthy
     networks:
       - hms-net
     restart: unless-stopped
 
   # ── PostgreSQL ────────────────────────────────────────────────────────────
   postgres:
-    image: postgres:${POSTGRES_VERSION}
-    ports:
-      - "127.0.0.1:15432:5432"
+    image: postgres:${POSTGRES_VERSION:-16.6-alpine}
     environment:
-      POSTGRES_DB: ${POSTGRES_DB}
-      POSTGRES_USER: ${POSTGRES_USER}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB:?POSTGRES_DB must be set}
+      POSTGRES_USER: ${POSTGRES_USER:?POSTGRES_USER must be set}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set}
       HMS_APP_PASSWORD: ${HMS_APP_PASSWORD:?HMS_APP_PASSWORD must be set}
     volumes:
       - postgres_data:/var/lib/postgresql/data
+      - postgres_wal:/var/lib/postgresql/wal_archive
+      - ./infrastructure/scripts/archive-wal.sh:/usr/local/bin/archive-wal.sh:ro
+      - ./infrastructure/scripts/restore-wal.sh:/usr/local/bin/restore-wal.sh:ro
     networks:
       - hms-net
     healthcheck:
@@ -155,12 +187,12 @@ services:
     # Internal only — port NOT published to host
 
   database-role-setup:
-    image: postgres:${POSTGRES_VERSION}
+    image: postgres:${POSTGRES_VERSION:-16.6-alpine}
     entrypoint: ["/bin/sh", "-c", "PGPASSWORD=\"$${POSTGRES_PASSWORD}\" psql -h postgres -U \"$${POSTGRES_USER}\" -d \"$${POSTGRES_DB}\" -v ON_ERROR_STOP=1 -v app_password=\"$${HMS_APP_PASSWORD}\" -f /scripts/001-runtime-role.sql"]
     environment:
-      POSTGRES_DB: ${POSTGRES_DB}
-      POSTGRES_USER: ${POSTGRES_USER}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB:?POSTGRES_DB must be set}
+      POSTGRES_USER: ${POSTGRES_USER:?POSTGRES_USER must be set}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set}
       HMS_APP_PASSWORD: ${HMS_APP_PASSWORD:?HMS_APP_PASSWORD must be set}
     volumes:
       - ./database/init/001-runtime-role.sql:/scripts/001-runtime-role.sql:ro
@@ -173,33 +205,43 @@ services:
 
   # ── Redis ────────────────────────────────────────────────────────────────
   redis:
-    image: redis:${REDIS_VERSION}
-    ports:
-      - "127.0.0.1:16379:6379"
-    command: ["redis-server", "/usr/local/etc/redis/redis.conf"]
+    image: redis:${REDIS_VERSION:-7.4.2-alpine}
+    command: ["sh", "-c", "exec redis-server /usr/local/etc/redis/redis.conf --requirepass \"$$REDIS_PASSWORD\""]
+    environment:
+      REDIS_PASSWORD: ${REDIS_PASSWORD:?REDIS_PASSWORD must be set}
     volumes:
       - redis_data:/data
       - ./config/redis.conf:/usr/local/etc/redis/redis.conf:ro
     networks:
       - hms-net
     healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
+      test: ["CMD-SHELL", "REDISCLI_AUTH=\"$$REDIS_PASSWORD\" redis-cli ping | grep -q PONG"]
       interval: 10s
       timeout: 5s
       retries: 5
-    # Internal only — port NOT published to host
 
   # ── S3-compatible local object storage ─────────────────────────────────
   object-storage:
-    image: chrislusf/seaweedfs:latest
-    command: server -dir=/data -s3 -s3.port=8333
+    image: chrislusf/seaweedfs:${SEAWEEDFS_VERSION:-3.80}
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        umask 077
+        printf '{"identities":[{"name":"hms","credentials":[{"accessKey":"%s","secretKey":"%s"}],"actions":["Admin","Read","Write","List"]}]}' "$$OBJECT_STORAGE_ACCESS_KEY" "$$OBJECT_STORAGE_SECRET_KEY" > /tmp/s3.json
+        exec weed server -dir=/data -s3 -s3.port=8333 -s3.config=/tmp/s3.json
+    environment:
+      OBJECT_STORAGE_ACCESS_KEY: ${OBJECT_STORAGE_ACCESS_KEY:?OBJECT_STORAGE_ACCESS_KEY must be set}
+      OBJECT_STORAGE_SECRET_KEY: ${OBJECT_STORAGE_SECRET_KEY:?OBJECT_STORAGE_SECRET_KEY must be set}
     volumes:
       - object_storage_data:/data
     networks:
       - hms-net
-    ports:
-      - "127.0.0.1:18333:8333"
     restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:8333/status"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
 
 networks:
   hms-net:
@@ -207,5 +249,6 @@ networks:
 
 volumes:
   postgres_data: {}
+  postgres_wal: {}
   redis_data: {}
   object_storage_data: {}

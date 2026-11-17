@@ -100,6 +100,85 @@ export enum UserStatus {
   DEACTIVATED = 'DEACTIVATED',
 }
 
+export enum StudentAttendanceStatus {
+  PRESENT = 'PRESENT',
+  ABSENT = 'ABSENT',
+  LATE = 'LATE',
+}
+
+export enum LeaveRequestStatus {
+  PENDING = 'PENDING',
+  APPROVED = 'APPROVED',
+  REJECTED = 'REJECTED',
+}
+
+export enum StudentGatePassStatus {
+  PENDING = 'PENDING',
+  APPROVED = 'APPROVED',
+  REJECTED = 'REJECTED',
+  EXPIRED = 'EXPIRED',
+}
+
+export enum MealAttendanceStatus {
+  PRESENT = 'PRESENT',
+  ABSENT = 'ABSENT',
+}
+
+export enum MealSubscriptionStatus {
+  ACTIVE = 'ACTIVE',
+  INACTIVE = 'INACTIVE',
+  EXPIRED = 'EXPIRED',
+}
+
+export enum PlatformAdminStatus {
+  ACTIVE = 'ACTIVE',
+  DEACTIVATED = 'DEACTIVATED',
+}
+
+export enum BillingInterval {
+  MONTHLY = 'MONTHLY',
+  QUARTERLY = 'QUARTERLY',
+  YEARLY = 'YEARLY',
+}
+
+export enum SubscriptionStatus {
+  TRIAL = 'TRIAL',
+  ACTIVE = 'ACTIVE',
+  SUSPENDED = 'SUSPENDED',
+  EXPIRED = 'EXPIRED',
+  CANCELLED = 'CANCELLED',
+}
+
+export enum PlatformInvoiceStatus {
+  PENDING = 'PENDING',
+  PAID = 'PAID',
+  VOID = 'VOID',
+}
+
+export enum PlatformPaymentMethod {
+  CASH = 'CASH',
+  BANK_TRANSFER = 'BANK_TRANSFER',
+  CARD = 'CARD',
+  OTHER = 'OTHER',
+}
+
+export enum DiscountType {
+  FIXED = 'FIXED',
+  PERCENTAGE = 'PERCENTAGE',
+  SCHOLARSHIP = 'SCHOLARSHIP',
+}
+
+export enum LateFeeType {
+  FIXED = 'FIXED',
+  PERCENTAGE = 'PERCENTAGE',
+}
+
+export enum DepositTransactionType {
+  DEPOSIT = 'DEPOSIT',
+  ADJUSTMENT = 'ADJUSTMENT',
+  REFUND = 'REFUND',
+}
+
 export enum PermissionAction {
   view            = 'view',
   create          = 'create',
@@ -115,4 +194,11 @@ export enum PermissionAction {
 
 export const Prisma = {
   sql: (strings: TemplateStringsArray, ..._values: unknown[]) => strings.join(''),
+  PrismaClientKnownRequestError: class extends Error {
+    code: string;
+    constructor(message: string, code: string) {
+      super(message);
+      this.code = code;
+    }
+  },
 };

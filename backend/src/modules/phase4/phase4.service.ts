@@ -153,18 +153,18 @@ export class Phase4Service {
 
     let complaint: Prisma.ComplaintGetPayload<{ select: typeof complaintSelect }>;
     try {
-      complaint = await this.prisma.complaint.create({
-        data: {
-          tenantId,
-          branchId,
-          title,
-          description,
-          priority,
-          submittedByUserId: actorUserId,
-          ...(dto.clientMutationId ? { clientMutationId: dto.clientMutationId } : {}),
-        },
-        select: complaintSelect,
-      });
+      complaint = await this.prisma.withSavepoint(() => this.prisma.complaint.create({
+          data: {
+            tenantId,
+            branchId,
+            title,
+            description,
+            priority,
+            submittedByUserId: actorUserId,
+            ...(dto.clientMutationId ? { clientMutationId: dto.clientMutationId } : {}),
+          },
+          select: complaintSelect,
+        }));
     } catch (error) {
       if (!dto.clientMutationId || !hasPrismaErrorCode(error, 'P2002')) throw error;
       const replay = await this.prisma.complaint.findFirst({
@@ -221,6 +221,7 @@ export class Phase4Service {
     actorUserId: string,
     complaintId: string,
   ) {
+    await this.ensureBranch(tenantId, branchId);
     const complaint = await this.prisma.complaint.findFirst({
       where: { id: complaintId, tenantId, branchId, deletedAt: null },
       select: complaintSelect,
@@ -273,6 +274,7 @@ export class Phase4Service {
     complaintId: string,
     dto: UpdateComplaintDto,
   ) {
+    await this.ensureBranch(tenantId, branchId);
     const current = await this.prisma.complaint.findFirst({
       where: { id: complaintId, tenantId, branchId, deletedAt: null },
       select: complaintSelect,
@@ -281,6 +283,9 @@ export class Phase4Service {
 
     if (dto.status === 'CLOSED' && current.status !== 'RESOLVED') {
       throw new ConflictException('A complaint must be resolved before it can be closed');
+    }
+    if (current.status === 'CLOSED' && dto.status && dto.status !== 'CLOSED') {
+      throw new ConflictException('Closed complaints cannot be reopened');
     }
     const result = await this.prisma.complaint.updateMany({
       where: {
@@ -432,6 +437,7 @@ export class Phase4Service {
     noticeId: string,
     dto: UpdateNoticeDto,
   ) {
+    await this.ensureBranch(tenantId, branchId);
     const current = await this.prisma.notice.findFirst({
       where: { id: noticeId, tenantId, branchId },
     });
@@ -446,6 +452,9 @@ export class Phase4Service {
       : dto.endsAt === null
         ? null
         : this.parseDateOnly(dto.endsAt, 'endsAt');
+    if ((dto.title !== undefined && !dto.title.trim()) || (dto.body !== undefined && !dto.body.trim())) {
+      throw new BadRequestException('Notice title and body cannot be empty');
+    }
     this.validateNoticeWindow(startsAt, endsAt);
 
     const status = dto.status ?? current.status;

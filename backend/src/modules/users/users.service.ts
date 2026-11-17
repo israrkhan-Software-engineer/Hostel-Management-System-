@@ -19,24 +19,25 @@ export class UsersService {
 
   /** Find a user by email within a tenant — used by auth */
   async findByEmail(tenantId: string, email: string): Promise<User | null> {
-    return this.prisma.user.findUnique({
-      where: { tenantId_email: { tenantId, email } },
+    return this.prisma.user.findFirst({
+      where: { tenantId, deletedAt: null, email: { equals: email.trim(), mode: 'insensitive' } },
     });
   }
 
   /** Find a user by phone within a tenant */
   async findByPhone(tenantId: string, phone: string): Promise<User | null> {
-    return this.prisma.user.findUnique({
-      where: { tenantId_phone: { tenantId, phone } },
+    return this.prisma.user.findFirst({
+      where: { tenantId, deletedAt: null, phone: phone.trim() },
     });
   }
 
   /** Find user by ID with their roles and permissions — used by guards */
   async findByIdWithRoles(id: string): Promise<UserWithRoles | null> {
-    return this.prisma.user.findUnique({
-      where: { id },
+    return this.prisma.user.findFirst({
+      where: { id, deletedAt: null },
       include: {
         userRoles: {
+          where: { role: { deletedAt: null } },
           include: {
             role: {
               include: {
@@ -50,7 +51,7 @@ export class UsersService {
   }
 
   async findById(id: string): Promise<User | null> {
-    return this.prisma.user.findUnique({ where: { id } });
+    return this.prisma.user.findFirst({ where: { id, deletedAt: null } });
   }
 
   /** Create a user — password is hashed here (SRS V2 NFR-003) */

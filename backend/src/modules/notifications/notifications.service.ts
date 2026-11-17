@@ -39,12 +39,28 @@ export class NotificationsService implements OnModuleDestroy {
     });
   }
 
-  async list(tenantId: string, userId: string, unreadOnly = false) {
-    return this.prisma.notification.findMany({
-      where: { tenantId, userId, ...(unreadOnly ? { readAt: null } : {}) },
-      orderBy: { createdAt: 'desc' },
-      take: 100,
-    });
+  async list(tenantId: string, userId: string, unreadOnly = false, page = 1, pageSize = 25) {
+    const safePage = Number.isFinite(page) && page > 0 ? Math.floor(page) : 1;
+    const safePageSize = Number.isFinite(pageSize) && pageSize > 0 ? Math.min(Math.floor(pageSize), 100) : 25;
+    const [items, total] = await Promise.all([
+      this.prisma.notification.findMany({
+        where: { tenantId, userId, ...(unreadOnly ? { readAt: null } : {}) },
+        orderBy: { createdAt: 'desc' },
+        skip: (safePage - 1) * safePageSize,
+        take: safePageSize,
+      }),
+      this.prisma.notification.count({
+        where: { tenantId, userId, ...(unreadOnly ? { readAt: null } : {}) },
+      }),
+    ]);
+
+    return {
+      items,
+      page: safePage,
+      pageSize: safePageSize,
+      total,
+      pageCount: Math.ceil(total / safePageSize) || 0,
+    };
   }
 
   async markRead(tenantId: string, userId: string, id: string) {
@@ -152,12 +168,14 @@ export class NotificationsService implements OnModuleDestroy {
         subject: input.email.subject,
         text: input.email.text,
         html: input.email.html,
-      }, input.deduplicationKey);
+      }, input.tenantId, input.deduplicationKey);
     }
     if (preferences?.sms === true && input.sms) {
-      await this.enqueueDelivery({ kind: 'sms', ...input.sms }, input.deduplicationKey
-        ? `${input.deduplicationKey}:sms`
-        : undefined);
+      await this.enqueueDelivery(
+        { kind: 'sms', ...input.sms },
+        input.tenantId,
+        input.deduplicationKey ? `${input.deduplicationKey}:sms` : undefined,
+      );
     }
   }
 
@@ -206,7 +224,7 @@ export class NotificationsService implements OnModuleDestroy {
         to: resident.email,
         subject: input.emailSubject,
         text: input.body,
-      }, input.deduplicationKey, input.emailDelay);
+      }, input.tenantId, input.deduplicationKey, input.emailDelay);
     }
   }
 
@@ -273,7 +291,7 @@ export class NotificationsService implements OnModuleDestroy {
     delay: number;
   }) {
     await this.queue.add('pending-rent-reminder', input, {
-      jobId: `pending-rent-${input.invoiceId}`,
+      jobId: `${input.tenantId}-pending-rent-${input.invoiceId}`,
       delay: Math.max(input.delay, 5_000),
       attempts: 5,
       backoff: { type: 'exponential', delay: 2_000 },
@@ -282,11 +300,11 @@ export class NotificationsService implements OnModuleDestroy {
     });
   }
 
-  async enqueueDelivery(payload: DeliveryPayload, idempotencyKey?: string, delay = 0) {
+  async enqueueDelivery(payload: DeliveryPayload, tenantId: string, idempotencyKey?: string, delay = 0) {
     const encryptedPayload = encryptField(JSON.stringify(payload), this.config.getOrThrow('app.fieldEncryptionKey'));
     const jobId = idempotencyKey
-      ? createHash('sha256').update(idempotencyKey).digest('hex')
-      : randomUUID();
+      ? `${tenantId}-${createHash('sha256').update(`${tenantId}:${idempotencyKey}`).digest('hex')}`
+      : `${tenantId}-${randomUUID()}`;
     await this.queue.add('deliver', { encryptedPayload }, {
       jobId,
       attempts: 5,
@@ -299,7 +317,7 @@ export class NotificationsService implements OnModuleDestroy {
 
   async scheduleLateFeeProcessing(tenantId: string, branchId: string) {
     await this.queue.add('apply-late-fees', { tenantId, branchId }, {
-      jobId: `late-fees-${tenantId}-${branchId}`,
+      jobId: `${tenantId}-late-fees-${branchId}`,
       repeat: { pattern: '0 2 * * *' },
       removeOnComplete: { count: 100 },
       removeOnFail: false,
@@ -308,7 +326,7 @@ export class NotificationsService implements OnModuleDestroy {
 
   async schedulePublishedAnnouncement(tenantId: string, branchId: string, noticeId: string) {
     await this.queue.add('published-announcement', { tenantId, branchId, noticeId }, {
-      jobId: `published-announcement-${noticeId}`,
+      jobId: `${tenantId}-published-announcement-${noticeId}`,
       delay: 1_000,
       attempts: 5,
       backoff: { type: 'exponential', delay: 2_000 },

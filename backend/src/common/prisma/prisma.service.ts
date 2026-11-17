@@ -15,6 +15,7 @@ const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3
 export class PrismaService extends PrismaClient implements OnModuleInit, OnModuleDestroy {
   private readonly logger = new Logger(PrismaService.name);
   private readonly tenantTransaction = new AsyncLocalStorage<TenantTransactionContext>();
+  private savepointSequence = 0;
 
   constructor() {
     super({
@@ -40,7 +41,7 @@ export class PrismaService extends PrismaClient implements OnModuleInit, OnModul
           || property === 'runWithTenantContext' || property === 'runWithPlatformContext'
           || property === 'runWithIndependentTenantContext'
           || property === 'runWithPlatformLoginContext' || property === 'resolveAuthTokenTenant'
-          || property === 'resolvePublicTenantSlug') {
+          || property === 'resolvePublicTenantSlug' || property === 'withSavepoint') {
           const value = Reflect.get(target, property, receiver);
           return typeof value === 'function' ? value.bind(target) : value;
         }
@@ -134,6 +135,30 @@ export class PrismaService extends PrismaClient implements OnModuleInit, OnModul
       await client.$queryRaw`SELECT set_config('hms.platform_login_email', ${normalizedEmail}, TRUE)`;
       return this.tenantTransaction.run({ platformLoginEmail: normalizedEmail, client }, operation);
     }, { timeout: 30_000 });
+  }
+
+  async withSavepoint<T>(operation: () => Promise<T>): Promise<T> {
+    const active = this.tenantTransaction.getStore();
+    if (!active) return operation();
+
+    const savepoint = `hms_sp_${++this.savepointSequence}`;
+    await active.client.$executeRawUnsafe(`SAVEPOINT ${savepoint}`);
+    try {
+      const result = await operation();
+      await active.client.$executeRawUnsafe(`RELEASE SAVEPOINT ${savepoint}`);
+      return result;
+    } catch (error) {
+      try {
+        await active.client.$executeRawUnsafe(`ROLLBACK TO SAVEPOINT ${savepoint}`);
+        await active.client.$executeRawUnsafe(`RELEASE SAVEPOINT ${savepoint}`);
+      } catch (rollbackError) {
+        throw new AggregateError(
+          [error, rollbackError],
+          'Database operation failed and its savepoint could not be rolled back',
+        );
+      }
+      throw error;
+    }
   }
 
   async resolveAuthTokenTenant(

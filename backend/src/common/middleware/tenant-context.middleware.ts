@@ -1,4 +1,4 @@
-import { CallHandler, ExecutionContext, Injectable, NestInterceptor } from '@nestjs/common';
+import { BadRequestException, CallHandler, ExecutionContext, Injectable, NestInterceptor } from '@nestjs/common';
 import { Reflector } from '@nestjs/core';
 import { Request } from 'express';
 import { from, lastValueFrom, mergeMap, Observable } from 'rxjs';
@@ -124,7 +124,13 @@ export class TenantContextInterceptor implements NestInterceptor {
 
   private publicHostelSlug(path: string): string | undefined {
     const match = path.match(/\/public\/hostels\/([^/]+)$/);
-    return match ? decodeURIComponent(match[1]) : undefined;
+    if (!match) return undefined;
+    try {
+      return decodeURIComponent(match[1]);
+    } catch (error) {
+      if (error instanceof URIError) throw new BadRequestException('Invalid hostel slug');
+      throw error;
+    }
   }
 
   private refreshToken(request: Request): string | undefined {

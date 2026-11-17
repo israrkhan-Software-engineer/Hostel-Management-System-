@@ -8,8 +8,11 @@ import {
   DiskHealthIndicator,
 } from '@nestjs/terminus';
 import { ApiTags } from '@nestjs/swagger';
+import { ConfigService } from '@nestjs/config';
+import IORedis from 'ioredis';
 import { PrismaService } from '../../common/prisma/prisma.service';
 import { Public } from '../../common/decorators/public.decorator';
+import { PaymentProofStorageService } from '../../common/storage/payment-proof-storage.service';
 
 @ApiTags('health')
 @Public()
@@ -20,6 +23,8 @@ export class HealthController {
     private memory: MemoryHealthIndicator,
     private disk: DiskHealthIndicator,
     private prismaService: PrismaService,
+    private config: ConfigService,
+    private storage: PaymentProofStorageService,
   ) {}
 
   /** Custom DB check — avoids terminus PrismaHealthIndicator binary dependency */
@@ -32,11 +37,40 @@ export class HealthController {
     }
   }
 
+  private async redisCheck(): Promise<HealthIndicatorResult> {
+    const redis = new IORedis(this.config.getOrThrow<string>('app.redisUrl'), {
+      lazyConnect: true,
+      connectTimeout: 2_000,
+      maxRetriesPerRequest: 1,
+      retryStrategy: () => null,
+    });
+    try {
+      await redis.connect();
+      await redis.ping();
+      return { redis: { status: 'up' } };
+    } catch {
+      return { redis: { status: 'down' } };
+    } finally {
+      redis.disconnect();
+    }
+  }
+
+  private async storageCheck(): Promise<HealthIndicatorResult> {
+    try {
+      await this.storage.checkHealth();
+      return { objectStorage: { status: 'up' } };
+    } catch {
+      return { objectStorage: { status: 'down' } };
+    }
+  }
+
   @Get()
   @HealthCheck()
   check(): Promise<HealthCheckResult> {
     return this.health.check([
       () => this.dbCheck(),
+      () => this.redisCheck(),
+      () => this.storageCheck(),
       () => this.memory.checkHeap('memory_heap', 512 * 1024 * 1024),
       () => this.disk.checkStorage('disk', { path: '/', thresholdPercent: 0.9 }),
     ]);
@@ -48,10 +82,14 @@ export class HealthController {
     return { status: 'ok', timestamp: new Date().toISOString() };
   }
 
-  /** Readiness probe — returns 200 only when DB is reachable */
+  /** Readiness requires PostgreSQL, authenticated Redis, and the private proof bucket. */
   @Get('ready')
   @HealthCheck()
   ready(): Promise<HealthCheckResult> {
-    return this.health.check([() => this.dbCheck()]);
+    return this.health.check([
+      () => this.dbCheck(),
+      () => this.redisCheck(),
+      () => this.storageCheck(),
+    ]);
   }
 }

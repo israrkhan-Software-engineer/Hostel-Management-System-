@@ -63,6 +63,7 @@ describe('StudentPortal', () => {
       if (path.endsWith('/complaints')) return success([]);
       if (path.endsWith('/notices')) return success([]);
       if (path.endsWith('/resident/finance')) return success([]);
+      if (path === '/notifications' || path === '/notifications/preferences') return success([]);
       return Promise.reject(new Error(`Unexpected API request: ${path}`));
     });
 
@@ -115,6 +116,7 @@ describe('StudentPortal', () => {
       if (path.endsWith('/complaints')) return success([]);
       if (path.endsWith('/notices')) return success([]);
       if (path.endsWith('/resident/finance')) return success([]);
+      if (path === '/notifications' || path === '/notifications/preferences') return success([]);
       return Promise.reject(new Error(`Unexpected API request: ${path}`));
     });
 

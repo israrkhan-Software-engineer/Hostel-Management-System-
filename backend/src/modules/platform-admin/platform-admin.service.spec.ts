@@ -14,6 +14,9 @@ describe('PlatformAdminService', () => {
       create: jest.Mock;
       update: jest.Mock;
     };
+    trialSettings: { findUnique: jest.Mock };
+    tenantSubscription: { create: jest.Mock };
+    subscriptionHistory: { create: jest.Mock };
     user: {
       create: jest.Mock;
       count: jest.Mock;
@@ -43,6 +46,9 @@ describe('PlatformAdminService', () => {
         create: jest.fn(),
         update: jest.fn(),
       },
+      trialSettings: { findUnique: jest.fn().mockResolvedValue({ durationDays: 14, trialPlanId: 'trial-plan' }) },
+      tenantSubscription: { create: jest.fn().mockResolvedValue({ id: 'subscription-1' }) },
+      subscriptionHistory: { create: jest.fn().mockResolvedValue(undefined) },
       user: {
         create: jest.fn(),
         count: jest.fn(),
@@ -132,7 +138,7 @@ describe('PlatformAdminService', () => {
         firstName: 'Amina',
         lastName: 'Khan',
         email: 'owner@example.test',
-        passwordHash: expect.stringMatching(/^pbkdf2:/),
+        passwordHash: expect.stringMatching(/^scrypt:/),
       }),
     }));
     const ownerPasswordHash = prisma.user.create.mock.calls[0][0].data.passwordHash as string;
@@ -245,7 +251,7 @@ describe('PlatformAdminService', () => {
 
     expect(prisma.user.update).toHaveBeenCalledWith({
       where: { id: 'owner-1' },
-      data: { passwordHash: expect.stringMatching(/^pbkdf2:/), tokenVersion: { increment: 1 } },
+      data: { passwordHash: expect.stringMatching(/^scrypt:/), tokenVersion: { increment: 1 } },
     });
     expect(prisma.refreshToken.updateMany).toHaveBeenCalled();
     expect(prisma.passwordResetToken.updateMany).toHaveBeenCalled();

@@ -15,7 +15,6 @@ import {
   MealSubscriptionStatus,
   MessMealType,
   StudentAttendanceStatus,
-  StudentDocumentCategory,
   StudentGatePassStatus,
 } from '@prisma/client';
 import ExcelJS from 'exceljs';
@@ -24,6 +23,7 @@ import { AuditService } from '../audit/audit.service';
 import { NotificationsService } from '../notifications/notifications.service';
 import { PrismaService } from '../../common/prisma/prisma.service';
 import { RolesService } from '../roles/roles.service';
+import { BusinessPoliciesService } from '../business-policies/business-policies.service';
 import { decryptField, encryptField } from '../../common/utils/field-encryption.util';
 import {
   AttendanceQueryDto,
@@ -62,6 +62,7 @@ export class HostelServicesService {
     private readonly audit: AuditService,
     config: ConfigService,
     @Optional() private readonly notifications?: NotificationsService,
+    @Optional() private readonly businessPolicies?: BusinessPoliciesService,
   ) {
     this.encryptionKey = config.getOrThrow<string>('app.fieldEncryptionKey');
   }
@@ -701,6 +702,15 @@ export class HostelServicesService {
     residentId?: string,
   ) {
     await this.ensureBranch(tenantId, branchId);
+
+    // Evaluate Physical Delete Policy (Safe default: physical deletion is blocked)
+    const allowed = await this.businessPolicies?.canPhysicallyDelete(tenantId, 'studentDocument') ?? false;
+    if (!allowed) {
+      throw new ForbiddenException(
+        'Permanent physical deletion of student documents is prohibited by policy. Policy requires explicit owner approval (G-08 / G-21).',
+      );
+    }
+
     const result = await this.prisma.studentDocument.deleteMany({
       where: { id: documentId, tenantId, branchId, ...(residentId ? { residentId } : {}) },
     });
@@ -1145,8 +1155,14 @@ export class HostelServicesService {
         : file.buffer.length >= 8
           && file.buffer.subarray(0, 8).equals(Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]));
     if (!validSignature) throw new BadRequestException('The uploaded file does not match its declared type');
-    const fileName = basename(file.originalname.split(/[\\/]/).pop() ?? '')
-      .replace(/[\u0000-\u001f\u007f"<>|:*?]/g, '_')
+    const fileName = Array.from(basename(file.originalname.split(/[\\/]/).pop() ?? ''))
+      .map((character) => {
+        const code = character.charCodeAt(0);
+        return code <= 0x1f || code === 0x7f || '"<>|:*?'.includes(character)
+          ? '_'
+          : character;
+      })
+      .join('')
       .slice(0, 180);
     if (!fileName) throw new BadRequestException('A valid document filename is required');
     return { buffer: file.buffer, mimetype: file.mimetype, originalName: fileName };

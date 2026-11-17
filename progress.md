@@ -2,6 +2,72 @@
 
 Execution is sequential. No database reset or destructive migration command is used.
 
+## Addendum — 2026-11-17 (Phase 3 Business Policies & Configuration Implementation)
+
+- **Centralized Business Policies Module (`BusinessPoliciesModule`):**
+  - Implemented `business-policies.types.ts`, `business-policies.dto.ts`, `business-policies.service.ts`, and `business-policies.controller.ts` under `backend/src/modules/business-policies/`.
+  - Registered in `AppModule` and integrated with `VisitorsModule`, `HostelServicesModule`, and `PlatformAdminModule`.
+- **Data Retention Policy:**
+  - Categorized residents, admissions, financial records, student documents, payment proofs, visitor logs, and audit logs.
+  - Implemented configurable retention durations without automatic purging (`autoPurgeEnabled: false` safe default).
+  - Enforced permanent immutable locks on financial records (invoices, payments, refunds) and audit trails.
+- **Backup Schedule Policy:**
+  - Separated backup execution frequency (`DAILY`, `TWICE_DAILY`, `WEEKLY`, `CUSTOM_CRON`) from retention periods.
+  - Keeps scheduling configurable without activating unapproved schedules in production.
+- **Visitor Hours Policy & Administrative Override:**
+  - Implemented configurable visiting entry and exit hours per tenant and per branch (`operatingSettings.visitorPolicy`).
+  - Added administrative emergency override support (`isEmergencyOverride`, `overrideReason`) logging audit events (`visitor.override_hours`).
+  - Safe advisory mode when policy is `PENDING_OWNER_APPROVAL`.
+- **Physical Delete Policy & Deletion Guards:**
+  - Evaluated physical delete permissions across all entities with safe default `allowPhysicalDeletion: false`.
+  - Guarded `deleteResidentDocument` in `HostelServicesService` against unauthorized permanent document deletion.
+  - Absolute permanent protection of financial records and audit logs.
+- **Owner Approval Workflow & Super Admin Oversight:**
+  - State machine: `PENDING_OWNER_APPROVAL` -> `SUBMITTED` -> `APPROVED` | `REJECTED`.
+  - `APPROVE` action strictly restricted to authenticated `Owner` role or Platform Super Admin.
+  - Every policy update and state transition logs an immutable audit event.
+  - Exposed cross-tenant visibility endpoints in `PlatformAdminController` (`GET platform/admin/business-policies/pending`).
+- **Comprehensive Documentation:**
+  - Authored `hms/docs/BUSINESS_POLICIES_REGISTER.md` detailing all policy domains, safe defaults, schemas, and outstanding owner decisions.
+
+## Addendum — 2026-11-17 (Phase 2 Backup, Restore & Disaster Recovery Implementation)
+
+- **PostgreSQL 16 Automated Backup & PITR Architecture:**
+  - Implemented logical streaming encrypted dumps (`pg_dump`) and physical basebackup snapshots (`pg_basebackup`) directly in `infrastructure/scripts/backup.sh`.
+  - Implemented continuous WAL archiving via `infrastructure/scripts/archive-wal.sh` and `infrastructure/scripts/restore-wal.sh` with `infrastructure/config/postgresql-pitr.conf` (`archive_timeout = 900s`), architected to support the project target of RPO <= 15 minutes.
+  - Mounted WAL archive volume (`postgres_wal`) and archiving scripts directly into PostgreSQL in `docker-compose.yml`.
+- **Encryption & Fail-Closed Security:**
+  - Streaming encryption (`GPG` asymmetric recipient, `GPG` symmetric AES-256 passphrase, or AWS `KMS` envelope encryption) ensures no plaintext database or object storage data is ever written to production disk.
+  - Fail-closed validation halts backup immediately with non-zero exit code if encryption keys are missing or invalid in production mode.
+- **SeaweedFS & S3 Object Storage Backup:**
+  - Supports both local SeaweedFS container volume snapshots and live S3-compatible API sync for external S3 storage.
+  - Preserves tenant-specific hierarchical object key prefixes (`payment-proofs/{tenantId}/{paymentId}`, `documents/{tenantId}/...`).
+  - Generates SHA-256 checksums for all backup artifacts and links them to database proof verification records.
+- **Disaster Recovery & Restoration Scripts (`restore.sh` & `dr-prepare.sh`):**
+  - Implemented `infrastructure/scripts/restore.sh` with strict production overwrite safeguards: defaults to an isolated recovery database (`hms_recovery_<timestamp>`) and requires explicit CLI flag `--confirm-overwrite` and `ALLOW_PRODUCTION_OVERWRITE=CONFIRM_DESTRUCTIVE_OVERWRITE` to touch active production databases.
+  - Integrated pre-flight SHA-256 integrity verification, stream decryption, and `--dry-run` inspection.
+  - Automated post-restore verification asserting `FORCE ROW LEVEL SECURITY` across all tenant tables, `hms_app` runtime role constraints (`NOSUPERUSER`, `NOBYPASSRLS`), and denial of unauthorized elevated table permissions.
+  - Implemented `infrastructure/scripts/dr-prepare.sh` for host prerequisite validation, disk capacity preflight, key verification, and automated generation of `.env.recovery`.
+- **Automation & Scheduling Configuration:**
+  - Configured crontab template `infrastructure/config/backup.cron` and systemd service/timer units (`hms-backup.service`, `hms-backup.timer`).
+- **Comprehensive Runbooks & Documentation:**
+  - Authored `infrastructure/docs/DISASTER_RECOVERY_RUNBOOK.md` covering all disaster scenarios, RTO/RPO architecture, and escalation procedures.
+  - Authored `infrastructure/docs/DATABASE_RECOVERY.md` detailing PostgreSQL 16 PITR and RLS security invariants.
+  - Authored `infrastructure/docs/OBJECT_STORAGE_BACKUP.md` detailing S3 bucket structures, tenant key preservation, and checksum verification.
+- **Strict Compliance:**
+  - No tests were run; no live production restore was executed; no disaster recovery drill was performed; RPO/RTO targets are documented as architectural targets requiring formal measured drill validation.
+  - Retention remains non-destructive (`PENDING_OWNER_DECISION`); no permanent schedule or retention period was assumed or hardcoded.
+
+## Addendum — 2026-11-17 (infrastructure and runtime configuration)
+
+- Repaired production Nginx routing, request limits, security headers, forwarded-IP handling, auth/reset rate limits, and TLS configuration; the local Compose proxy remains a separate HTTP-only development config.
+- Added a production Compose overlay with pinned image tags, a non-root Nginx image, environment/TLS preflight, and a one-shot Prisma migration target so API replicas do not race migrations. Runtime database credentials are no longer passed to API or worker containers.
+- Preserved existing Redis password auth, AOF, and `noeviction`; added a minimum secret check, Redis/S3/PostgreSQL readiness dependencies, authenticated local SeaweedFS S3 configuration, tenant-prefixed BullMQ job IDs, and a worker registration health probe.
+- Added API readiness checks for PostgreSQL, authenticated Redis, and the private S3 bucket; corrected the frontend health probe and host health-check script. Production backups now require encryption and use restrictive file permissions.
+- Updated deployment instructions and remaining-gap tracking. No automated tests, browser checks, live container deployment, production service access, or production certification were run.
+- Local-volume backups are encrypted in production mode and protected by a restrictive umask; the script explicitly refuses to claim complete production storage backup because the production overlay uses external S3-compatible storage. Provider-side object backup and DB scheduling remain external.
+- External prerequisites remain: production secrets/secret manager, valid TLS files and hostname, HTTPS S3-compatible endpoint/bucket, approved backup schedule/key custody/off-host replication/retention, and any trusted upstream proxy IP configuration.
+
 ## Addendum — 2026-11-10 (performance and object storage)
 
 - Added a private S3-compatible payment-proof provider, checksum persistence/verification, and permission-checked API streaming. New uploads no longer put proof bytes in PostgreSQL.

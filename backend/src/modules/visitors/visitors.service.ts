@@ -3,6 +3,7 @@ import {
   ConflictException,
   Injectable,
   NotFoundException,
+  Optional,
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { Prisma, VisitorVisitStatus } from '@prisma/client';
@@ -14,7 +15,8 @@ import {
   fingerprintField,
   maskIdentityNumber,
 } from '../../common/utils/field-encryption.util';
-import { CreateVisitorVisitDto } from './visitors.dto';
+import { CreateVisitorVisitDto, CheckInVisitorDto } from './visitors.dto';
+import { BusinessPoliciesService } from '../business-policies/business-policies.service';
 
 const visitorVisitSelect = {
   id: true,
@@ -44,6 +46,7 @@ export class VisitorsService {
     private readonly prisma: PrismaService,
     private readonly audit: AuditService,
     config: ConfigService,
+    @Optional() private readonly businessPolicies?: BusinessPoliciesService,
   ) {
     this.encryptionKey = config.getOrThrow<string>('app.fieldEncryptionKey');
   }
@@ -107,6 +110,31 @@ export class VisitorsService {
       throw new BadRequestException('Visitor name and visit purpose are required');
     }
 
+    // Evaluate branch-specific or tenant-wide visitor hours policy
+    const policyEvaluation = this.businessPolicies
+      ? await this.businessPolicies.evaluateVisitorEntry(tenantId, branchId)
+      : { allowed: true, requiresOverride: false };
+    if (!policyEvaluation.allowed) {
+      if (dto.isEmergencyOverride) {
+        if (!dto.overrideReason?.trim()) {
+          throw new BadRequestException('An override reason is required for visitor registration outside approved visiting hours');
+        }
+        await this.audit.log({
+          tenantId,
+          branchId,
+          actorUserId,
+          action: 'visitor.override_hours',
+          module: 'visitors',
+          entityType: 'policy',
+          entityId: branchId,
+          afterData: { overrideReason: dto.overrideReason.trim(), trigger: 'registration' },
+          outcome: 'success',
+        });
+      } else {
+        throw new BadRequestException(policyEvaluation.reason ?? 'Visitor registration is outside approved visiting hours');
+      }
+    }
+
     const visit = await this.prisma.visitorVisit.create({
       data: {
         tenantId,
@@ -161,7 +189,38 @@ export class VisitorsService {
     );
   }
 
-  checkInVisitor(tenantId: string, branchId: string, actorUserId: string, visitId: string) {
+  async checkInVisitor(
+    tenantId: string,
+    branchId: string,
+    actorUserId: string,
+    visitId: string,
+    overrideDto?: CheckInVisitorDto,
+  ) {
+    // Evaluate branch-specific or tenant-wide visitor hours policy
+    const policyEvaluation = this.businessPolicies
+      ? await this.businessPolicies.evaluateVisitorEntry(tenantId, branchId)
+      : { allowed: true, requiresOverride: false };
+    if (!policyEvaluation.allowed) {
+      if (overrideDto?.isEmergencyOverride) {
+        if (!overrideDto.overrideReason?.trim()) {
+          throw new BadRequestException('An override reason is required for visitor check-in outside approved visiting hours');
+        }
+        await this.audit.log({
+          tenantId,
+          branchId,
+          actorUserId,
+          action: 'visitor.override_hours',
+          module: 'visitors',
+          entityType: 'visitor_visit',
+          entityId: visitId,
+          afterData: { overrideReason: overrideDto.overrideReason.trim(), trigger: 'check_in' },
+          outcome: 'success',
+        });
+      } else {
+        throw new BadRequestException(policyEvaluation.reason ?? 'Visitor check-in is outside approved visiting hours');
+      }
+    }
+
     return this.transitionVisitorVisit(
       tenantId,
       branchId,
@@ -239,6 +298,7 @@ export class VisitorsService {
     extraData: Prisma.VisitorVisitUncheckedUpdateManyInput,
     action: string,
   ) {
+    await this.ensureBranch(tenantId, branchId);
     const current = await this.prisma.visitorVisit.findFirst({
       where: { id: visitId, tenantId, branchId, deletedAt: null },
       select: visitorVisitSelect,

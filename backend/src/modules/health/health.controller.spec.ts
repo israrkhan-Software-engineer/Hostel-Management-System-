@@ -15,6 +15,12 @@ describe('HealthController', () => {
   const mockPrisma = {
     $queryRawUnsafe: jest.fn().mockResolvedValue([{ '?column?': 1 }]),
   };
+  const mockConfig = {
+    getOrThrow: jest.fn().mockReturnValue(`redis://:${'r'.repeat(32)}@localhost:6379`),
+  };
+  const mockStorage = {
+    checkHealth: jest.fn().mockResolvedValue(undefined),
+  };
 
   beforeEach(() => {
     jest.clearAllMocks();
@@ -23,6 +29,8 @@ describe('HealthController', () => {
       mockMemory as any,
       mockDisk as any,
       mockPrisma as any,
+      mockConfig as any,
+      mockStorage as any,
     );
   });
 

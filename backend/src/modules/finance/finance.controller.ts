@@ -57,7 +57,7 @@ export class FinanceController {
   }
 
   @Get('resident/finance')
-  @RequirePermission('invoices', 'view')
+  @RequirePermission('resident_portal', 'view')
   listResidentInvoices(
     @Param('branchId', ParseUUIDPipe) branchId: string,
     @CurrentUser() user: RequestUser,
@@ -66,7 +66,7 @@ export class FinanceController {
   }
 
   @Post('resident/invoices/:invoiceId/payments')
-  @RequirePermission('payments', 'create')
+  @RequirePermission('resident_portal', 'create')
   @SkipTenantTransaction()
   @UseInterceptors(FileInterceptor('proof', { limits: { fileSize: 5 * 1024 * 1024, files: 1 } }))
   submitResidentPayment(
@@ -87,7 +87,7 @@ export class FinanceController {
   }
 
   @Get('resident/payments/:paymentId/proof')
-  @RequirePermission('payment_proofs', 'view')
+  @RequirePermission('resident_portal', 'view')
   @SkipTenantTransaction()
   async downloadResidentPaymentProof(
     @Param('branchId', ParseUUIDPipe) branchId: string,

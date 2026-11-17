@@ -192,6 +192,13 @@ export class AuthService {
       throw new UnauthorizedException('Refresh token expired');
     }
 
+    const tenant = await this.prisma.tenant.findFirst({
+      where: { id: stored.tenantId, deletedAt: null },
+    });
+    if (!tenant || !this.tenants.isActive(tenant)) {
+      throw new UnauthorizedException('Tenant account is not active');
+    }
+
     // Verify user is still active
     const user = await this.users.findById(stored.userId);
     if (!user || user.status !== UserStatus.ACTIVE) {
@@ -401,29 +408,64 @@ export class AuthService {
       outcome: 'success',
     });
 
-    if (user.email) {
-      const resetUrl = new URL('/reset-password', this.config.get<string>('app.frontendUrl'));
+    try {
+      const frontendUrl = this.config.get<string>('app.frontendUrl');
+      if (!frontendUrl) {
+        throw new Error('APP_FRONTEND_URL is not configured');
+      }
+      const resetUrl = new URL('/reset-password', frontendUrl);
       resetUrl.searchParams.set('token', rawToken);
       const resetLink = resetUrl.toString();
-      try {
+      const emailText = `Use this single-use link within 1 hour to reset your password: ${resetLink}`;
+      const smsText = `Reset your password: ${resetLink}`;
+
+      if (this.notifications && typeof this.notifications.notifyUser === 'function') {
+        await this.notifications.notifyUser({
+          tenantId,
+          userId: user.id,
+          category: 'account_security',
+          title: 'Reset your password',
+          body: emailText,
+          ...(user.email ? {
+            email: {
+              to: user.email,
+              subject: 'Reset your Hostel Management System password',
+              text: emailText,
+              html: `<p>Use this single-use link within 1 hour to reset your password:</p><p><a href="${resetLink.replace(/&/g, '&amp;').replace(/"/g, '&quot;')}">Reset password</a></p>`,
+            },
+          } : {}),
+          ...(user.phone ? { sms: { to: user.phone, text: smsText } } : {}),
+          deduplicationKey: `password-reset:${user.id}:${tokenHash}`,
+        });
+        return;
+      }
+
+      if (user.email) {
         await this.notifications?.enqueueDelivery({
           kind: 'email',
           to: user.email,
           subject: 'Reset your Hostel Management System password',
-          text: `Use this single-use link within 1 hour to reset your password: ${resetLink}`,
+          text: emailText,
           html: `<p>Use this single-use link within 1 hour to reset your password:</p><p><a href="${resetLink.replace(/&/g, '&amp;').replace(/"/g, '&quot;')}">Reset password</a></p>`,
-        }, `password-reset:${user.id}:${tokenHash}`);
-      } catch (error) {
-        const detail = error instanceof Error ? error.message : String(error);
-        this.logger.error(`Password-reset delivery enqueue failed for user ${user.id}: ${detail}`);
-        await this.audit.log({
-          tenantId,
-          actorUserId: user.id,
-          action: 'auth.password_reset.delivery_failed',
-          module: 'auth',
-          outcome: 'failure',
-        });
+        }, tenantId, `password-reset:${user.id}:${tokenHash}`);
       }
+      if (user.phone && this.notifications && typeof this.notifications.enqueueDelivery === 'function') {
+        await this.notifications.enqueueDelivery({
+          kind: 'sms',
+          to: user.phone,
+          text: smsText,
+        }, tenantId, `password-reset:${user.id}:${tokenHash}:sms`);
+      }
+    } catch (error) {
+      const detail = error instanceof Error ? error.message : String(error);
+      this.logger.warn(`Password reset link generation failed for user ${user.id}: ${detail}`);
+      await this.audit.log({
+        tenantId,
+        actorUserId: user.id,
+        action: 'auth.password_reset.link_failed',
+        module: 'auth',
+        outcome: 'failure',
+      });
     }
   }
 
@@ -542,7 +584,11 @@ export class AuthService {
   }
 
   private fieldEncryptionKey(): string {
-    return this.config.getOrThrow<string>('app.fieldEncryptionKey');
+    const key = this.config.get<string>('app.fieldEncryptionKey')?.trim();
+    if (!key || key.length < 32) {
+      throw new Error('FIELD_ENCRYPTION_KEY is not configured with a minimum 32-character secret.');
+    }
+    return key;
   }
 
   private parseDuration(d: string): number {

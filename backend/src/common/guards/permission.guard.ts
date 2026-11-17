@@ -8,6 +8,7 @@ import { Reflector } from '@nestjs/core';
 import { RolesService } from '../../modules/roles/roles.service';
 import { PERMISSION_KEY, RequiredPermission } from '../decorators/require-permission.decorator';
 import { IS_PUBLIC_KEY } from '../decorators/public.decorator';
+import { SKIP_PERMISSION_CHECK_KEY } from '../decorators/skip-permission-check.decorator';
 import { PrismaService } from '../prisma/prisma.service';
 import { SubscriptionStatus } from '@prisma/client';
 
@@ -28,7 +29,11 @@ export class PermissionGuard implements CanActivate {
       context.getHandler(),
       context.getClass(),
     ]);
-    if (isPublic) return true;
+    const skipPermissionCheck = this.reflector.getAllAndOverride<boolean>(
+      SKIP_PERMISSION_CHECK_KEY,
+      [context.getHandler(), context.getClass()],
+    );
+    if (isPublic || skipPermissionCheck) return true;
 
     const required = this.reflector.getAllAndOverride<RequiredPermission | undefined>(
       PERMISSION_KEY,
@@ -83,12 +88,12 @@ export class PermissionGuard implements CanActivate {
           return false;
         }
         const features = subscription.plan.features;
-        if (
-          !features
-          || typeof features !== 'object'
-          || Array.isArray(features)
-          || (features as Record<string, unknown>)[required.module] !== true
-        ) {
+        const featureMap = (features && typeof features === 'object' && !Array.isArray(features))
+          ? (features as Record<string, unknown>)
+          : {};
+        const requiredFeature = featureMap[required.module] === true;
+        const fallbackFeature = required.module === 'resident_portal' && featureMap.residents === true;
+        if (!requiredFeature && !fallbackFeature) {
           accessDenial = `The ${required.module} feature is not included in this subscription plan.`;
           return false;
         }

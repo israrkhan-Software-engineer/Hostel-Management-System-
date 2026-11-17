@@ -1,4 +1,5 @@
 import {
+  BadRequestException,
   ConflictException,
   Injectable,
   NotFoundException,
@@ -16,7 +17,7 @@ import {
   UpdateFloorDto,
   UpdateRoomDto,
 } from './inventory.dto';
-import { Prisma } from '@prisma/client';
+import { BedStatus, Prisma } from '@prisma/client';
 
 @Injectable()
 export class InventoryService {
@@ -37,7 +38,7 @@ export class InventoryService {
             rooms: {
               where: { deletedAt: null },
               orderBy: { code: 'asc' },
-              include: { _count: { select: { beds: true } } },
+              include: { _count: { select: { beds: { where: { deletedAt: null } } } } },
             },
           },
         },
@@ -53,8 +54,10 @@ export class InventoryService {
     dto: CreateBuildingDto,
   ) {
     await this.ensureBranch(tenantId, branchId);
+    const name = dto.name.trim();
+    if (!name) throw new BadRequestException('A non-empty building name is required');
     const building = await this.prisma.building.create({
-      data: { tenantId, branchId, name: dto.name.trim() },
+      data: { tenantId, branchId, name },
     });
     await this.audit.log({
       tenantId,
@@ -233,7 +236,7 @@ export class InventoryService {
             building: { select: { id: true, name: true } },
           },
         },
-        _count: { select: { beds: true } },
+        _count: { select: { beds: { where: { deletedAt: null } } } },
       },
       orderBy: { code: 'asc' },
       take: 500,
@@ -247,6 +250,7 @@ export class InventoryService {
     dto: CreateRoomDto,
   ) {
     await this.ensureBranch(tenantId, branchId);
+    if (!dto.code.trim()) throw new BadRequestException('A non-empty room code is required');
     try {
       const room = await this.prisma.$transaction(async (tx) => {
         await tx.$queryRaw<Array<{ id: string }>>`
@@ -306,6 +310,9 @@ export class InventoryService {
     await this.ensureBranch(tenantId, branchId);
     if (dto.code === undefined && dto.bedCapacity === undefined) {
       throw new ConflictException('At least one room field must be provided');
+    }
+    if (dto.code !== undefined && !dto.code.trim()) {
+      throw new BadRequestException('A non-empty room code is required');
     }
     try {
       await this.prisma.$transaction(async (tx) => {
@@ -391,6 +398,7 @@ export class InventoryService {
     dto: CreateBedDto,
   ) {
     await this.ensureBranch(tenantId, branchId);
+    if (!dto.code.trim()) throw new BadRequestException('A non-empty bed code is required');
     try {
       const bed = await this.prisma.$transaction(async (tx) => {
         await tx.$queryRaw<Array<{ id: string }>>`
@@ -493,6 +501,49 @@ export class InventoryService {
         select: { id: true },
       });
       if (activeAllocation) throw new ConflictException('A bed with an active allocation cannot be archived');
+    });
+  }
+
+  async updateBedStatus(
+    tenantId: string,
+    branchId: string,
+    actorUserId: string,
+    bedId: string,
+    status: BedStatus,
+  ) {
+    await this.ensureBranch(tenantId, branchId);
+
+    const current = await this.prisma.bed.findFirst({
+      where: { id: bedId, tenantId, branchId, deletedAt: null },
+      select: { id: true, status: true },
+    });
+    if (!current) throw new NotFoundException('Bed not found in this branch');
+
+    if (status === 'AVAILABLE' && current.status !== 'OUT_OF_SERVICE') {
+      throw new ConflictException('Only out-of-service beds can be returned to AVAILABLE');
+    }
+    if (status === 'OUT_OF_SERVICE' && current.status !== 'AVAILABLE') {
+      throw new ConflictException('Only available beds can be marked out of service');
+    }
+
+    const activeAllocation = await this.prisma.bedAllocation.findFirst({
+      where: { tenantId, branchId, bedId, endedAt: null },
+      select: { id: true },
+    });
+    if (activeAllocation && status === 'OUT_OF_SERVICE') {
+      throw new ConflictException('A bed with an active allocation cannot be placed out of service');
+    }
+
+    const result = await this.prisma.bed.updateMany({
+      where: { id: bedId, tenantId, branchId, deletedAt: null },
+      data: { status },
+    });
+    if (result.count !== 1) throw new NotFoundException('Bed not found in this branch');
+
+    await this.auditInventoryChange(tenantId, branchId, actorUserId, 'bed.status_update', 'bed', bedId);
+    return this.prisma.bed.findFirstOrThrow({
+      where: { id: bedId, tenantId, branchId, deletedAt: null },
+      include: { room: { select: { id: true, code: true } } },
     });
   }
 

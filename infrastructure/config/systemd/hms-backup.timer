@@ -1,0 +1,12 @@
+[Unit]
+Description=Timer for Hostel Management System Automated Backup
+Documentation=file:///d:/Office work/Hostel mangement system/Hostel Mangement system/HMS_Phase1/hms/infrastructure/docs/DISASTER_RECOVERY_RUNBOOK.md
+
+[Timer]
+# Proposed default: Daily at 02:00 UTC (Pending Owner Approval G-09 / OD-06)
+OnCalendar=*-*-* 02:00:00 UTC
+RandomizedDelaySec=300
+Persistent=true
+
+[Install]
+WantedBy=timers.target

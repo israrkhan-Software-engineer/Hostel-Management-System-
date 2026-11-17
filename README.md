@@ -104,20 +104,21 @@ HMS is a multi-tenant SaaS platform designed for hostel operators. Each tenant (
 ## Quick Start
 
 ```bash
-# 1. Copy and configure environment secrets
+# 1. Copy the template and replace every CHANGE_ME value with a unique secret
 cp .env.example .env
 
-# 2. Start the full local stack (HTTP reverse proxy on :8080)
+# 2. Validate local environment and start the local-only stack
+bash infrastructure/scripts/validate-env.sh
 docker compose up --build -d
 
-# 3. App is served through nginx — migrations run automatically
+# 3. App is served through the local HTTP-only nginx proxy
 open http://localhost:8080
 
 # 4. (Optional) Seed demo tenants and staff accounts — development only
 docker compose exec api npm run db:seed
 ```
 
-> The local Compose stack uses SeaweedFS and an HTTP-only localhost nginx proxy. **Never use this configuration in production.**
+> The default Compose stack uses local SeaweedFS and an HTTP-only localhost nginx proxy. **Never use it as-is in production.** Database migrations run once in the `migrate` service before the API starts.
 
 After seeding, sign in with:
 
@@ -130,6 +131,36 @@ After seeding, sign in with:
 A linked demo resident is also available: `resident@sunrise-hostel.demo` / `Demo1234!`
 The local Compose stack uses SeaweedFS as its S3-compatible development object store and an HTTP-only, localhost-bound nginx proxy. Do not use the development environment or proxy configuration in production.
 The seed command creates development-only users with simple passwords; never run it against production data.
+
+## Production Compose deployment
+
+The production overlay is a self-hosted Compose template, not a deployed environment or production certification. It requires Docker Compose v2.24.4 or newer for `!override` merge tags.
+
+1. Create a separate `.env.production` from `.env.example`. Set `NODE_ENV=production` and `OBJECT_STORAGE_AUTO_CREATE_BUCKET=false`. Replace every placeholder with unique generated values (at least 32 characters for database, Redis, JWT, encryption, and object-storage secrets); use URL-safe letters, digits, `_`, or `-` for database and Redis passwords. Set the real frontend URL, exact trusted `CORS_ORIGINS`, HTTPS S3-compatible `OBJECT_STORAGE_URL`, private bucket credentials, `TLS_CERT_FILE`, `TLS_KEY_FILE`, and `BACKUP_GPG_RECIPIENT`. Keep this file out of source control.
+2. Validate without printing secret values:
+
+   ```bash
+   HMS_ENV_FILE=.env.production bash infrastructure/scripts/validate-env.sh --production
+   docker compose --env-file .env.production -f docker-compose.yml -f docker-compose.prod.yml config --quiet
+   ```
+
+3. Start the API, frontend, Nginx, PostgreSQL, Redis, and one-shot migration job:
+
+   ```bash
+   docker compose --env-file .env.production -f docker-compose.yml -f docker-compose.prod.yml up --build -d
+   ```
+
+   The API container uses the non-privileged `hms_app` database role; only the one-shot `migrate` service receives `DATABASE_MIGRATION_URL`. Persisted PostgreSQL and Redis data use named volumes; Redis AOF is enabled. Provision the private object-storage bucket before startup. The readiness endpoint checks PostgreSQL, authenticated Redis, and that bucket.
+4. To run the background processor, explicitly set `HMS_ENABLE_WORKER=true`, then start the same stack with `--profile worker`:
+
+   ```bash
+   docker compose --env-file .env.production -f docker-compose.yml -f docker-compose.prod.yml --profile worker up --build -d
+   ```
+
+   The profile remains disabled by default; a running worker health probe verifies that BullMQ registers it with Redis.
+5. Before production use, set `server_name` in `config/nginx.conf` to the deployment hostname and mount valid certificate/key files readable by the unprivileged Nginx process. The repository backup script handles the local Compose SeaweedFS volume only; it deliberately refuses to imply that external production S3 data was backed up. Any production use of that script also requires GPG encryption. Configure provider-side object backup, database scheduling, key custody, retention, off-host copies, and restore drills in the target operations environment.
+
+No live deployment, production database, certificate, object-storage provider, secret manager, backup schedule, or disaster-recovery workflow is provisioned or verified by this repository configuration.
 After seeding, sign in locally with `owner@sunrise-hostel.demo`, password `Demo1234!`, and tenant slug `sunrise-hostel`. These credentials are for local development only.
 The seed is safe to rerun: it adds missing demo records and does not clear existing data. It creates demo tenants `sunrise-hostel` and `greenview-hostel`, staff logins (`sysadmin`, `owner`, `warden`, `reception`, `accountant`, `security`, `mess`, and `maintenance` at `@sunrise-hostel.demo` or `@greenview-hostel.demo`), and student logins `resident`, `ayesha.khan`, `bilal.ahmed`, `sana.ali`, `omar.raza`, and `hira.malik` at the same domain. All use `Demo1234!`.
 

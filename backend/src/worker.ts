@@ -8,8 +8,14 @@ import { FinanceEnhancementsService } from './modules/finance/finance-enhancemen
 import { FinanceService } from './modules/finance/finance.service';
 import { PrismaService } from './common/prisma/prisma.service';
 import { NOTIFICATION_QUEUE, NotificationsService } from './modules/notifications/notifications.service';
+import { isWorkerEnabled } from './common/utils/runtime-guard.util';
 
 async function bootstrapWorker() {
+  if (!isWorkerEnabled()) {
+    const logger = new Logger('HmsWorker');
+    logger.warn('Notification worker is disabled. Set HMS_ENABLE_WORKER=true to allow queue processing in production.');
+    return;
+  }
   const app = await NestFactory.createApplicationContext(AppModule);
   const logger = new Logger('HmsWorker');
   const config = app.get(ConfigService);

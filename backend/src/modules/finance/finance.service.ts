@@ -794,7 +794,7 @@ export class FinanceService {
         to: resident.email,
         subject: `New hostel invoice ${invoiceNumber}`,
         text: invoiceMessage,
-      }, `invoice-created:${invoice.id}`);
+      }, tenantId, `invoice-created:${invoice.id}`);
     }
     if (dto.dueAt) {
       const reminderAt = new Date(dto.dueAt).getTime();
@@ -1011,7 +1011,7 @@ export class FinanceService {
             to: invoice.resident.email,
             subject: 'Hostel payment confirmed',
             text: message,
-          }, `payment-verified:${paymentId}`);
+          }, tenantId, `payment-verified:${paymentId}`);
         }
       }
     }

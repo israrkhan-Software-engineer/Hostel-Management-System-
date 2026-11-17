@@ -1,6 +1,7 @@
 'use client';
 
 import { FormEvent, useState } from 'react';
+import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { apiRequest, setAccessToken } from '@/lib/api/client';
 
@@ -12,6 +13,7 @@ type LoginFormProps = {
 export default function LoginForm({ audience, tenantSlug: studentTenantSlug }: LoginFormProps) {
   const router = useRouter();
   const isStudent = audience === 'student';
+  const [studentSlug, setStudentSlug] = useState(studentTenantSlug ?? '');
   const [staffTenantSlug, setStaffTenantSlug] = useState('');
   const [login, setLogin] = useState('');
   const [password, setPassword] = useState('');
@@ -22,11 +24,15 @@ export default function LoginForm({ audience, tenantSlug: studentTenantSlug }: L
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     setError('');
+    if (isStudent && !studentSlug.trim()) {
+      setError('Enter your hostel ID to continue.');
+      return;
+    }
     setSubmitting(true);
     const response = await apiRequest<{ accessToken: string }>('/auth/login', {
       method: 'POST',
       body: JSON.stringify({
-        tenantSlug: isStudent ? studentTenantSlug : staffTenantSlug.trim(),
+        tenantSlug: isStudent ? studentSlug.trim() : staffTenantSlug.trim(),
         login: login.trim(),
         password,
         ...(mfaCode.trim() ? { mfaCode: mfaCode.trim() } : {}),
@@ -58,7 +64,10 @@ export default function LoginForm({ audience, tenantSlug: studentTenantSlug }: L
       setSubmitting(false);
       return;
     }
-    router.replace(profile.data.roles.includes('Resident') ? '/resident' : '/reception');
+    const tenantSlug = isStudent ? studentSlug.trim() : staffTenantSlug.trim();
+    router.replace(profile.data.roles.includes('Resident')
+      ? `/resident?hostel=${encodeURIComponent(tenantSlug)}`
+      : '/reception');
   }
 
   return (
@@ -67,10 +76,17 @@ export default function LoginForm({ audience, tenantSlug: studentTenantSlug }: L
         <span className="eyebrow">{isStudent ? 'STUDENT PORTAL' : 'HOSTEL MANAGEMENT SYSTEM'}</span>
         <h1>{isStudent ? 'Student sign in' : 'Welcome back'}</h1>
         <p>{isStudent ? 'Sign in with the account provided by your hostel.' : 'Sign in to manage your hostel operations.'}</p>
-        {!isStudent && (
+        {(!isStudent || !studentTenantSlug) && (
           <label>
             Hostel ID
-            <input required autoComplete="organization" value={staffTenantSlug} onChange={(event) => setStaffTenantSlug(event.target.value)} />
+            <input
+              required
+              autoComplete="organization"
+              value={isStudent ? studentSlug : staffTenantSlug}
+              onChange={(event) => isStudent
+                ? setStudentSlug(event.target.value)
+                : setStaffTenantSlug(event.target.value)}
+            />
           </label>
         )}
         <label>
@@ -94,10 +110,10 @@ export default function LoginForm({ audience, tenantSlug: studentTenantSlug }: L
         <button className="button primary full-width" type="submit" disabled={submitting}>
           {submitting ? 'Signing in…' : 'Sign in'}
         </button>
-        <a className="quiet-link" href="/forgot-password">Forgot your password?</a>
-        {isStudent && <a className="quiet-link" href="/login">Staff sign in</a>}
-        <a className="quiet-link" href="/">Return to public page</a>
-        {!isStudent && <a className="quiet-link" href="/platform-admin/login">Platform administrator sign in</a>}
+        <Link className="quiet-link" href="/forgot-password">Forgot your password?</Link>
+        {isStudent && <Link className="quiet-link" href="/login">Staff sign in</Link>}
+        <Link className="quiet-link" href="/">Return to public page</Link>
+        {!isStudent && <Link className="quiet-link" href="/platform-admin/login">Platform administrator sign in</Link>}
       </form>
     </main>
   );

@@ -1,4 +1,4 @@
-import { IsOptional, IsString, IsUUID, Matches, MaxLength, MinLength } from 'class-validator';
+import { IsBoolean, IsOptional, IsString, IsUUID, Matches, MaxLength, MinLength } from 'class-validator';
 
 export class CreateVisitorVisitDto {
   @IsString()
@@ -24,4 +24,24 @@ export class CreateVisitorVisitDto {
   @MinLength(1)
   @MaxLength(500)
   purpose!: string;
+
+  @IsOptional()
+  @IsBoolean()
+  isEmergencyOverride?: boolean;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(255)
+  overrideReason?: string;
+}
+
+export class CheckInVisitorDto {
+  @IsOptional()
+  @IsBoolean()
+  isEmergencyOverride?: boolean;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(255)
+  overrideReason?: string;
 }

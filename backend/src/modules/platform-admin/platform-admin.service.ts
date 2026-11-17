@@ -560,9 +560,13 @@ export class PlatformAdminService {
   }
 
   private validateTimezone(timezone?: string) {
-    if (!timezone) return;
+    if (timezone === undefined) return;
+    const normalized = timezone.trim();
+    if (!normalized) {
+      throw new BadRequestException('Timezone cannot be empty');
+    }
     try {
-      new Intl.DateTimeFormat('en', { timeZone: timezone });
+      new Intl.DateTimeFormat('en', { timeZone: normalized });
     } catch {
       throw new BadRequestException('Timezone must be a valid IANA timezone');
     }
@@ -576,5 +580,39 @@ export class PlatformAdminService {
       total,
       pageCount: Math.ceil(total / filter.pageSize),
     };
+  }
+
+  async listPendingBusinessPolicies(adminId: string) {
+    return this.prisma.runWithPlatformContext(adminId, async () => {
+      const tenants = await this.prisma.tenant.findMany({
+        where: { deletedAt: null },
+        select: { id: true, name: true, slug: true, settings: true },
+        orderBy: { name: 'asc' },
+      });
+
+      return tenants.map((t) => {
+        const rawSettings = (t.settings ?? {}) as Record<string, unknown>;
+        const policies = (rawSettings.businessPolicies ?? {}) as Record<string, any>;
+        const dataRetentionStatus = policies.dataRetention?.approvalStatus ?? 'PENDING_OWNER_APPROVAL';
+        const backupScheduleStatus = policies.backupSchedule?.approvalStatus ?? 'PENDING_OWNER_APPROVAL';
+        const visitorHoursStatus = policies.visitorHours?.approvalStatus ?? 'PENDING_OWNER_APPROVAL';
+        const physicalDeleteStatus = policies.physicalDelete?.approvalStatus ?? 'PENDING_OWNER_APPROVAL';
+
+        return {
+          tenantId: t.id,
+          tenantName: t.name,
+          slug: t.slug,
+          dataRetentionStatus,
+          backupScheduleStatus,
+          visitorHoursStatus,
+          physicalDeleteStatus,
+          hasPendingDecisions:
+            dataRetentionStatus === 'PENDING_OWNER_APPROVAL' ||
+            backupScheduleStatus === 'PENDING_OWNER_APPROVAL' ||
+            visitorHoursStatus === 'PENDING_OWNER_APPROVAL' ||
+            physicalDeleteStatus === 'PENDING_OWNER_APPROVAL',
+        };
+      });
+    });
   }
 }

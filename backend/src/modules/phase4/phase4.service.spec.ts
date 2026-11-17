@@ -21,6 +21,7 @@ describe('Phase4Service', () => {
         update: jest.fn(),
         updateMany: jest.fn(),
       },
+      withSavepoint: jest.fn((operation: () => Promise<unknown>) => operation()),
       notice: { findMany: jest.fn(), findFirst: jest.fn(), create: jest.fn(), update: jest.fn() },
       $transaction: jest.fn(),
     };
@@ -120,6 +121,30 @@ describe('Phase4Service', () => {
     expect(audit.log).not.toHaveBeenCalled();
   });
 
+  it('recovers the transaction before reading a concurrent idempotent complaint replay', async () => {
+    const replay = {
+      id: 'complaint-1',
+      title: 'Water leak',
+      description: 'The shower is leaking.',
+      priority: 'NORMAL',
+      status: 'OPEN',
+    };
+    prisma.complaint.findFirst
+      .mockResolvedValueOnce(null)
+      .mockResolvedValueOnce(replay);
+    prisma.complaint.create.mockRejectedValue({ code: 'P2002' });
+
+    await expect(service.createComplaint('tenant-1', 'branch-1', 'resident-1', {
+      title: 'Water leak',
+      description: 'The shower is leaking.',
+      priority: 'NORMAL' as any,
+      clientMutationId: '4c89d50b-5aa9-4b74-99ec-3b52d2179e0a',
+    })).resolves.toEqual(replay);
+
+    expect(prisma.withSavepoint).toHaveBeenCalledTimes(1);
+    expect(prisma.complaint.findFirst).toHaveBeenCalledTimes(2);
+  });
+
   it('claims unassigned complaints and prevents stealing another staff member assignment', async () => {
     const openComplaint = {
       id: 'complaint-1',
@@ -159,6 +184,15 @@ describe('Phase4Service', () => {
       status: 'CLOSED' as any,
     })).rejects.toThrow(ConflictException);
     expect(prisma.complaint.update).not.toHaveBeenCalled();
+  });
+
+  it('does not allow a closed complaint to be reopened', async () => {
+    prisma.complaint.findFirst.mockResolvedValue({ id: 'complaint-1', status: 'CLOSED' });
+
+    await expect(service.updateComplaint('tenant-1', 'branch-1', 'staff-1', 'complaint-1', {
+      status: 'IN_PROGRESS' as any,
+    })).rejects.toThrow('Closed complaints cannot be reopened');
+    expect(prisma.complaint.updateMany).not.toHaveBeenCalled();
   });
 
   it('archives resolved complaints without physically deleting them', async () => {
@@ -211,10 +245,15 @@ describe('Phase4Service', () => {
     expect(prisma.notice.create).not.toHaveBeenCalled();
   });
 
-  it('does not return notices or complaints from an inactive or unrelated branch', async () => {
+  it('rejects inactive or unrelated branches before complaint or notice mutation/detail reads', async () => {
     prisma.branch.findFirst.mockResolvedValue(null);
 
     await expect(service.listManagedNotices('tenant-1', 'branch-2')).rejects.toThrow(NotFoundException);
-    expect(prisma.notice.findMany).not.toHaveBeenCalled();
+    await expect(service.assignComplaintToSelf('tenant-1', 'branch-2', 'staff-1', 'complaint-1')).rejects.toThrow(NotFoundException);
+    await expect(service.updateComplaint('tenant-1', 'branch-2', 'staff-1', 'complaint-1', { status: 'IN_PROGRESS' as any })).rejects.toThrow(NotFoundException);
+    await expect(service.updateNotice('tenant-1', 'branch-2', 'staff-1', 'notice-1', { title: 'Updated' })).rejects.toThrow(NotFoundException);
+
+    expect(prisma.complaint.findFirst).not.toHaveBeenCalled();
+    expect(prisma.notice.findFirst).not.toHaveBeenCalled();
   });
 });

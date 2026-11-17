@@ -109,6 +109,7 @@ export class ResidentsService {
   }
 
   async get(tenantId: string, branchId: string, residentId: string) {
+    await this.ensureBranch(tenantId, branchId);
     const resident = await this.prisma.resident.findFirst({
       where: { id: residentId, tenantId, branchId, deletedAt: null },
     });
@@ -259,6 +260,7 @@ export class ResidentsService {
     residentId: string,
     dto: UpdateResidentDto,
   ) {
+    await this.ensureBranch(tenantId, branchId);
     const existing = await this.prisma.resident.findFirst({
       where: { id: residentId, tenantId, branchId, deletedAt: null },
     });
@@ -294,10 +296,26 @@ export class ResidentsService {
   }
 
   async deactivate(tenantId: string, branchId: string, actorUserId: string, residentId: string) {
+    await this.ensureBranch(tenantId, branchId);
     const existing = await this.prisma.resident.findFirst({
       where: { id: residentId, tenantId, branchId, deletedAt: null },
     });
     if (!existing) throw new NotFoundException('Resident not found');
+
+    const activeAdmission = await this.prisma.admission.findFirst({
+      where: {
+        tenantId,
+        branchId,
+        residentId,
+        status: { in: ['PENDING', 'APPROVED', 'CHECKED_IN'] },
+        deletedAt: null,
+      },
+      select: { id: true },
+    });
+    if (activeAdmission) {
+      throw new ConflictException('A resident with an active admission cannot be deactivated');
+    }
+
     const activeAllocation = await this.prisma.bedAllocation.findFirst({
       where: { tenantId, branchId, residentId, endedAt: null },
       select: { id: true },
@@ -305,6 +323,21 @@ export class ResidentsService {
     if (activeAllocation) {
       throw new ConflictException('A resident with an active bed allocation cannot be deactivated');
     }
+
+    const outstandingInvoice = await this.prisma.invoice.findFirst({
+      where: {
+        tenantId,
+        branchId,
+        residentId,
+        status: 'ISSUED',
+        deletedAt: null,
+      },
+      select: { id: true },
+    });
+    if (outstandingInvoice) {
+      throw new ConflictException('A resident with an outstanding invoice cannot be deactivated');
+    }
+
     const resident = await this.prisma.resident.update({
       where: { id: residentId },
       data: { status: 'INACTIVE', deletedAt: new Date() },

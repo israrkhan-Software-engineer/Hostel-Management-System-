@@ -40,7 +40,7 @@ export class RolesService {
     tenantId: string,
   ): Promise<Array<{ module: string; action: PermissionAction }>> {
     const userRoles = await this.prisma.userRole.findMany({
-      where: { userId, tenantId },
+      where: { userId, tenantId, role: { deletedAt: null } },
       include: {
         role: {
           include: {

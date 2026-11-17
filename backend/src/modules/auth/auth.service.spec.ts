@@ -1,4 +1,7 @@
+import { plainToInstance } from 'class-transformer';
+import { validate } from 'class-validator';
 import { AuthService } from './auth.service';
+import { LoginDto } from './auth.dto';
 import { UnauthorizedException, ForbiddenException } from '@nestjs/common';
 
 import { hashPassword, hashToken, generateToken } from '../../common/utils/password.util';
@@ -27,6 +30,7 @@ describe('AuthService', () => {
   let mockTenants: any;
   let mockUsers: any;
   let mockAudit: any;
+  let mockNotifications: any;
 
   const activeTenant = {
     id: 'tenant-1', slug: 'test-hostel', status: TenantStatus.ACTIVE, deletedAt: null,
@@ -38,12 +42,15 @@ describe('AuthService', () => {
   beforeEach(async () => {
     mockPrisma = {
       user: { update: jest.fn().mockResolvedValue({}) },
+      tenant: { findFirst: jest.fn().mockResolvedValue(activeTenant) },
       refreshToken: {
         create: jest.fn().mockResolvedValue({}),
         findUnique: jest.fn(),
-        updateMany: jest.fn().mockResolvedValue({}),
+        updateMany: jest.fn().mockResolvedValue({ count: 1 }),
         update: jest.fn().mockResolvedValue({}),
       },
+      runWithIndependentTenantContext: jest.fn((_tenantId: string, operation: () => Promise<unknown>) => operation()),
+      $executeRaw: jest.fn().mockResolvedValue([{ failed_login_attempts: 1 }]),
       passwordResetToken: {
         findUnique: jest.fn(),
         updateMany: jest.fn().mockResolvedValue({}),
@@ -54,13 +61,22 @@ describe('AuthService', () => {
     };
 
     mockJwt = { sign: jest.fn().mockReturnValue('mock.access.token') };
+    mockNotifications = {
+      notifyUser: jest.fn().mockResolvedValue(undefined),
+      enqueueDelivery: jest.fn().mockResolvedValue(undefined),
+    };
     mockConfig = { get: jest.fn().mockImplementation((key: string, def?: string) => {
       if (key === 'app.jwtSecret') return 'test-secret';
       if (key === 'app.jwtAccessExpiry') return '15m';
       if (key === 'app.jwtRefreshExpiry') return '7d';
+      if (key === 'app.frontendUrl') return 'https://app.example.test';
       return def;
     }) };
-    mockAudit = { log: jest.fn().mockResolvedValue(undefined) };
+    mockAudit = {
+      log: jest.fn().mockResolvedValue(undefined),
+      logOrThrow: jest.fn().mockResolvedValue(undefined),
+      logDurably: jest.fn().mockResolvedValue(undefined),
+    };
     mockTenants = {
       findBySlug: jest.fn().mockResolvedValue(activeTenant),
       isActive: jest.fn().mockReturnValue(true),
@@ -74,8 +90,42 @@ describe('AuthService', () => {
     };
 
     service = new AuthService(
-      mockPrisma, mockJwt, mockConfig, mockTenants, mockUsers, mockAudit,
+      mockPrisma, mockJwt, mockConfig, mockTenants, mockUsers, mockAudit, mockNotifications,
     );
+  });
+
+  it('login dto trims surrounding whitespace before validation', async () => {
+    const dto = plainToInstance(LoginDto, {
+      tenantSlug: '  test-hostel  ',
+      login: '  owner@test.com  ',
+      password: '  correctpass123!  ',
+    });
+
+    const errors = await validate(dto);
+    expect(errors).toHaveLength(0);
+    expect(dto.tenantSlug).toBe('test-hostel');
+    expect(dto.login).toBe('owner@test.com');
+    expect(dto.password).toBe('correctpass123!');
+  });
+
+  it('initiatePasswordReset sends both email and SMS via the notification service when contact methods exist', async () => {
+    mockUsers.findByEmail.mockResolvedValue({
+      id: 'user-1',
+      tenantId: 'tenant-1',
+      email: 'owner@test.com',
+      phone: '+923001234567',
+    });
+
+    await service.initiatePasswordReset('tenant-1', 'owner@test.com');
+
+    expect(mockNotifications.notifyUser).toHaveBeenCalledWith(expect.objectContaining({
+      tenantId: 'tenant-1',
+      userId: 'user-1',
+      category: 'account_security',
+      email: expect.objectContaining({ to: 'owner@test.com' }),
+      sms: expect.objectContaining({ to: '+923001234567' }),
+      deduplicationKey: expect.stringContaining('password-reset:user-1:'),
+    }));
   });
 
   // ── Login ─────────────────────────────────────────────────────────────────
@@ -104,7 +154,7 @@ describe('AuthService', () => {
     await expect(
       service.login({ tenantSlug: 'test-hostel', login: 'owner@test.com', password: 'wrong' }),
     ).rejects.toThrow(UnauthorizedException);
-    expect(mockAudit.log).toHaveBeenCalledWith(
+    expect(mockAudit.logOrThrow).toHaveBeenCalledWith(
       expect.objectContaining({ action: 'auth.login.failed', outcome: 'failure' }),
     );
   });
@@ -149,8 +199,11 @@ describe('AuthService', () => {
     });
     const result = await service.refresh(raw);
     expect(result.accessToken).toBeTruthy();
-    expect(mockPrisma.refreshToken.update).toHaveBeenCalledWith(
-      expect.objectContaining({ data: { isRevoked: true, revokedAt: expect.any(Date) } }),
+    expect(mockPrisma.refreshToken.updateMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: expect.objectContaining({ id: 'rt-1', isRevoked: false }),
+        data: { isRevoked: true, revokedAt: expect.any(Date) },
+      }),
     );
     expect(mockPrisma.refreshToken.create).toHaveBeenCalledTimes(1); // new token created
   });
@@ -165,7 +218,7 @@ describe('AuthService', () => {
     await expect(service.refresh(raw)).rejects.toThrow(UnauthorizedException);
   });
 
-  it('refresh: reuse detection — already-revoked token revokes ALL sessions', async () => {
+  it('refresh: reuse detection is escalated for independent session revocation', async () => {
     const raw = generateToken();
     mockPrisma.refreshToken.findUnique.mockResolvedValue({
       id: 'rt-1', userId: 'user-1', tenantId: 'tenant-1',
@@ -173,13 +226,21 @@ describe('AuthService', () => {
       expiresAt: new Date(Date.now() + 100_000),
     });
     await expect(service.refresh(raw)).rejects.toThrow(UnauthorizedException);
-    // All sessions revoked
-    expect(mockPrisma.refreshToken.updateMany).toHaveBeenCalledWith(
-      expect.objectContaining({ where: { userId: 'user-1', isRevoked: false } }),
-    );
-    expect(mockAudit.log).toHaveBeenCalledWith(
-      expect.objectContaining({ action: 'auth.refresh.reuse_detected' }),
-    );
+    expect(mockPrisma.refreshToken.updateMany).not.toHaveBeenCalled();
+  });
+
+  it('refresh: inactive tenant cannot renew a session', async () => {
+    const raw = generateToken();
+    mockPrisma.refreshToken.findUnique.mockResolvedValue({
+      id: 'rt-1', userId: 'user-1', tenantId: 'tenant-1',
+      tokenHash: hashToken(raw), isRevoked: false, expiresAt: new Date(Date.now() + 100_000),
+    });
+    mockPrisma.tenant.findFirst.mockResolvedValue(suspendedTenant);
+    mockTenants.isActive.mockReturnValue(false);
+
+    await expect(service.refresh(raw)).rejects.toThrow(UnauthorizedException);
+    expect(mockUsers.findById).not.toHaveBeenCalled();
+    expect(mockPrisma.refreshToken.updateMany).not.toHaveBeenCalled();
   });
 
   it('refresh: non-existent token → 401', async () => {

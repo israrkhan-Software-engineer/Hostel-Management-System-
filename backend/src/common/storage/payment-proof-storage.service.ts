@@ -61,6 +61,15 @@ export class PaymentProofStorageService implements OnModuleDestroy {
     }));
   }
 
+  async checkHealth(): Promise<void> {
+    const client = this.getClient();
+    const bucket = this.bucket();
+    if (this.config.get<boolean>('app.objectStorageAutoCreateBucket')) {
+      await this.ensureBucket(client, bucket);
+    }
+    await client.send(new HeadBucketCommand({ Bucket: bucket }));
+  }
+
   async onModuleDestroy(): Promise<void> {
     this.client?.destroy();
   }

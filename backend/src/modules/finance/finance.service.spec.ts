@@ -8,6 +8,7 @@ describe('FinanceService', () => {
 
   beforeEach(() => {
     prisma = {
+      runWithTenantContext: jest.fn((_tenantId, operation) => operation()),
       branch: { findFirst: jest.fn().mockResolvedValue({ id: 'branch-1' }) },
       resident: { findFirst: jest.fn().mockResolvedValue({ id: 'resident-1' }) },
       tenant: {

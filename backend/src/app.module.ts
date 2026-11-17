@@ -27,6 +27,7 @@ import { PlatformAdminModule } from './modules/platform-admin/platform-admin.mod
 import { HostelServicesModule } from './modules/hostel-services/hostel-services.module';
 import { NotificationsModule } from './modules/notifications/notifications.module';
 import { TenantManagementModule } from './modules/users/tenant-management.module';
+import { BusinessPoliciesModule } from './modules/business-policies/business-policies.module';
 
 const apiRateLimitPerMinute = Number(process.env.API_RATE_LIMIT_PER_MINUTE ?? '10000');
 if (!Number.isSafeInteger(apiRateLimitPerMinute) || apiRateLimitPerMinute < 1) {
@@ -60,6 +61,7 @@ if (!Number.isSafeInteger(apiRateLimitPerMinute) || apiRateLimitPerMinute < 1) {
     HostelServicesModule,
     NotificationsModule,
     TenantManagementModule,
+    BusinessPoliciesModule,
   ],
   providers: [
     // Global guard chain: L1 Auth → L2 Tenant → L4 Permission

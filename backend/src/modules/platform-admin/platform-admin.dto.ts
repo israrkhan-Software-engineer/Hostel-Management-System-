@@ -1,4 +1,4 @@
-import { Type } from 'class-transformer';
+import { Transform, Type } from 'class-transformer';
 import {
   IsEmail,
   IsEnum,
@@ -16,10 +16,30 @@ import {
   IsArray,
   IsNotEmpty,
   ValidateIf,
+  registerDecorator,
+  ValidationArguments,
 } from 'class-validator';
 import { TenantStatus, UserStatus } from '@prisma/client';
 
 const PASSWORD_PATTERN = /^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)(?=.*[^A-Za-z0-9\s]).{12,128}$/;
+
+function MatchField(fieldName: string, message?: string) {
+  return (target: object, propertyName: string) => {
+    registerDecorator({
+      name: 'matchField',
+      target: target.constructor,
+      propertyName,
+      constraints: [fieldName],
+      options: { message: message ?? `${propertyName} must match ${fieldName}` },
+      validator: {
+        validate(value: unknown, args: ValidationArguments) {
+          const object = args.object as Record<string, unknown>;
+          return value === object[fieldName];
+        },
+      },
+    });
+  };
+}
 
 export class PlatformPaginationDto {
   @IsOptional()
@@ -48,50 +68,61 @@ export class TenantQueryDto extends PlatformPaginationDto {
 }
 
 export class CreateTenantDto {
+  @Transform(({ value }) => (typeof value === 'string' ? value.trim() : value))
   @IsString()
   @MinLength(2)
   @MaxLength(120)
   name!: string;
 
+  @Transform(({ value }) => (typeof value === 'string' ? value.trim() : value))
   @IsString()
   @MinLength(3)
   @MaxLength(60)
   @Matches(/^[a-z0-9]+(?:-[a-z0-9]+)*$/)
   slug!: string;
 
+  @Transform(({ value }) => (typeof value === 'string' ? value.trim() : value))
   @IsString()
   @MinLength(2)
   @MaxLength(100)
   ownerFirstName!: string;
 
+  @Transform(({ value }) => (typeof value === 'string' ? value.trim() : value))
   @IsString()
   @MinLength(2)
   @MaxLength(100)
   ownerLastName!: string;
 
+  @Transform(({ value }) => (typeof value === 'string' ? value.trim() : value))
   @IsEmail()
   @MaxLength(254)
   ownerEmail!: string;
 
+  @Transform(({ value }) => (typeof value === 'string' ? value.trim() : value))
   @IsString()
   @IsNotEmpty()
   @MaxLength(500)
   locationAddress!: string;
 
+  @Transform(({ value }) => (typeof value === 'string' ? value.trim() : value))
   @IsString()
   @MinLength(12)
   @MaxLength(128)
   @Matches(PASSWORD_PATTERN)
   ownerPassword!: string;
 
+  @Transform(({ value }) => (typeof value === 'string' ? value.trim() : value))
   @IsString()
   @MinLength(12)
   @MaxLength(128)
   @Matches(PASSWORD_PATTERN)
+  @MatchField('ownerPassword')
   ownerPasswordConfirmation!: string;
 
+  @Transform(({ value }) => (typeof value === 'string' ? value.trim() : value))
   @ValidateIf((_object, value) => value !== undefined)
   @IsString()
+  @IsNotEmpty()
   @MaxLength(100)
   timezone?: string;
 
@@ -101,12 +132,14 @@ export class CreateTenantDto {
 }
 
 export class UpdateTenantDto {
+  @Transform(({ value }) => (typeof value === 'string' ? value.trim() : value))
   @ValidateIf((_object, value) => value !== undefined)
   @IsString()
   @MinLength(2)
   @MaxLength(120)
   name?: string;
 
+  @Transform(({ value }) => (typeof value === 'string' ? value.trim() : value))
   @ValidateIf((_object, value) => value !== undefined)
   @IsString()
   @MinLength(3)
@@ -114,31 +147,37 @@ export class UpdateTenantDto {
   @Matches(/^[a-z0-9]+(?:-[a-z0-9]+)*$/)
   slug?: string;
 
+  @Transform(({ value }) => (typeof value === 'string' ? value.trim() : value))
   @ValidateIf((_object, value) => value !== undefined)
   @IsString()
   @MinLength(2)
   @MaxLength(100)
   ownerFirstName?: string;
 
+  @Transform(({ value }) => (typeof value === 'string' ? value.trim() : value))
   @ValidateIf((_object, value) => value !== undefined)
   @IsString()
   @MinLength(2)
   @MaxLength(100)
   ownerLastName?: string;
 
+  @Transform(({ value }) => (typeof value === 'string' ? value.trim() : value))
   @ValidateIf((_object, value) => value !== undefined)
   @IsEmail()
   @MaxLength(254)
   ownerEmail?: string;
 
+  @Transform(({ value }) => (typeof value === 'string' ? value.trim() : value))
   @ValidateIf((_object, value) => value !== undefined)
   @IsString()
   @IsNotEmpty()
   @MaxLength(500)
   locationAddress?: string;
 
+  @Transform(({ value }) => (typeof value === 'string' ? value.trim() : value))
   @ValidateIf((_object, value) => value !== undefined)
   @IsString()
+  @IsNotEmpty()
   @MaxLength(100)
   timezone?: string;
 
@@ -148,16 +187,19 @@ export class UpdateTenantDto {
 }
 
 export class ResetTenantOwnerPasswordDto {
+  @Transform(({ value }) => (typeof value === 'string' ? value.trim() : value))
   @IsString()
   @MinLength(12)
   @MaxLength(128)
   @Matches(PASSWORD_PATTERN)
   newPassword!: string;
 
+  @Transform(({ value }) => (typeof value === 'string' ? value.trim() : value))
   @IsString()
   @MinLength(12)
   @MaxLength(128)
   @Matches(PASSWORD_PATTERN)
+  @MatchField('newPassword')
   confirmation!: string;
 }
 

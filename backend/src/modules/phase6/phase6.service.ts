@@ -90,9 +90,11 @@ export class Phase6Service {
             AND status = 'PENDING' AND deleted_at IS NULL) AS "pendingAdmissions",
         (SELECT COUNT(*)::int FROM complaints
           WHERE tenant_id = ${tenantId}::uuid AND branch_id = ${branchId}::uuid
+            AND deleted_at IS NULL
             AND status IN ('OPEN', 'IN_PROGRESS')) AS "openComplaints",
         (SELECT COUNT(*)::int FROM visitor_visits
           WHERE tenant_id = ${tenantId}::uuid AND branch_id = ${branchId}::uuid
+            AND deleted_at IS NULL
             AND status = 'PENDING') AS "pendingVisitorVisits"
     `);
 

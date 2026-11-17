@@ -37,6 +37,10 @@ describe('Phase6Service', () => {
       capturedAt: expect.any(String),
     });
     expect(prisma.$queryRaw).toHaveBeenCalledTimes(1);
+    const query = prisma.$queryRaw.mock.calls[0][0] as string;
+    expect(query).toContain('complaints');
+    expect(query).toContain('visitor_visits');
+    expect(query.match(/deleted_at IS NULL/g)).toHaveLength(6);
     expect(result).not.toHaveProperty('residentDetails');
     expect(result).not.toHaveProperty('financialTotals');
   });

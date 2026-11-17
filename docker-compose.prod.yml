@@ -1,0 +1,45 @@
+services:
+  nginx:
+    image: nginxinc/nginx-unprivileged:${NGINX_VERSION:-1.27.4-alpine}
+    ports: !override
+      - "80:8080"
+      - "443:8443"
+    volumes: !override
+      - ./config/nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./config/nginx.api-proxy.conf:/etc/nginx/hms-api-proxy.conf:ro
+      - ${TLS_CERT_FILE:?TLS_CERT_FILE must point to a TLS certificate}:/etc/nginx/cert.pem:ro
+      - ${TLS_KEY_FILE:?TLS_KEY_FILE must point to a TLS private key}:/etc/nginx/key.pem:ro
+    healthcheck:
+      test: ["CMD", "wget", "--no-check-certificate", "-qO-", "https://127.0.0.1:8443/"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+
+  api:
+    environment:
+      NODE_ENV: production
+      OBJECT_STORAGE_URL: ${OBJECT_STORAGE_URL:?Set an HTTPS S3-compatible production endpoint}
+    depends_on: !override
+      postgres:
+        condition: service_healthy
+      database-role-setup:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+
+  worker:
+    environment:
+      NODE_ENV: production
+      OBJECT_STORAGE_URL: ${OBJECT_STORAGE_URL:?Set an HTTPS S3-compatible production endpoint}
+    depends_on: !override
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      api:
+        condition: service_healthy
+
+  object-storage:
+    profiles: ["local-storage"]

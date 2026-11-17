@@ -39,7 +39,7 @@ describe('LoginForm', () => {
     });
     fireEvent.click(screen.getByRole('button', { name: 'Sign in' }));
 
-    await waitFor(() => expect(mockReplace).toHaveBeenCalledWith('/resident'));
+    await waitFor(() => expect(mockReplace).toHaveBeenCalledWith('/resident?hostel=sunrise-hostel'));
     expect(mockedApiRequest).toHaveBeenNthCalledWith(1, '/auth/login', expect.objectContaining({
       body: JSON.stringify({
         tenantSlug: 'sunrise-hostel',
@@ -70,5 +70,28 @@ describe('LoginForm', () => {
     );
     expect(mockedSetAccessToken).toHaveBeenLastCalledWith(null);
     expect(mockReplace).not.toHaveBeenCalled();
+  });
+
+  it('asks for a hostel ID when no public hostel slug is available', async () => {
+    mockedApiRequest
+      .mockResolvedValueOnce({ ok: true, data: { accessToken: 'student-token' } })
+      .mockResolvedValueOnce({ ok: true, data: { roles: ['Resident'] } });
+
+    render(<LoginForm audience="student" />);
+    fireEvent.change(screen.getByLabelText('Hostel ID'), { target: { value: 'north-hostel' } });
+    fireEvent.change(screen.getByLabelText('Student email or phone'), {
+      target: { value: 'student@example.com' },
+    });
+    fireEvent.change(screen.getByLabelText('Password'), { target: { value: 'StudentPass123!' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Sign in' }));
+
+    await waitFor(() => expect(mockReplace).toHaveBeenCalledWith('/resident?hostel=north-hostel'));
+    expect(mockedApiRequest).toHaveBeenNthCalledWith(1, '/auth/login', expect.objectContaining({
+      body: JSON.stringify({
+        tenantSlug: 'north-hostel',
+        login: 'student@example.com',
+        password: 'StudentPass123!',
+      }),
+    }));
   });
 });

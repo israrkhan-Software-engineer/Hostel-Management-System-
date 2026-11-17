@@ -1,0 +1,28 @@
+# ==============================================================================
+# HMS Automated Backup Schedule Configuration (crontab template)
+# ==============================================================================
+# IMPORTANT POLICY NOTE (G-09 / OD-06):
+# The permanent backup schedule and retention duration REQUIRE OWNER APPROVAL.
+# These entries are configurable templates. Do not activate in production without
+# owner sign-off.
+#
+# PENDING OWNER DECISIONS:
+# 1. Full Backup Frequency: Daily at 02:00 UTC vs Twice Daily (02:00 & 14:00 UTC).
+# 2. Retention Duration: 30 days vs 90 days vs 7 years (tax/financial compliance).
+# 3. Off-site S3 Sync: Immediate after backup vs Batch sync window.
+# ==============================================================================
+
+SHELL=/bin/bash
+PATH=/usr/local/sbin:/usr/local/bin:/sbin:/bin:/usr/sbin:/usr/bin
+HMS_ENV_FILE=/path/to/hms/.env
+
+# Proposed Schedule Option A (Daily Full + Continuous WAL for 15-min RPO):
+# At 02:00 UTC every day, run full encrypted database and object storage backup.
+# (PostgreSQL continuous WAL archiving runs independently via archive_command).
+0 2 * * * /path/to/hms/infrastructure/scripts/backup.sh >> /var/backups/hms/cron.log 2>&1
+
+# Proposed Schedule Option B (High-Activity: Every 6 hours):
+# 0 */6 * * * /path/to/hms/infrastructure/scripts/backup.sh >> /var/backups/hms/cron.log 2>&1
+
+# Optional Weekly Archive Drill (Dry-run integrity validation every Sunday at 04:00 UTC):
+# 0 4 * * 0 /path/to/hms/infrastructure/scripts/dr-prepare.sh >> /var/backups/hms/dr_preflight.log 2>&1

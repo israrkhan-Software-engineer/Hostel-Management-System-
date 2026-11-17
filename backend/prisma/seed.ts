@@ -25,6 +25,7 @@ import {
   type Room,
 } from '@prisma/client';
 import { hashPassword } from '../src/common/utils/password.util';
+import { assertSeedAllowed } from '../src/common/utils/runtime-guard.util';
 import { randomUUID } from 'crypto';
 
 const prisma = new PrismaClient({
@@ -38,6 +39,7 @@ const MODULES = [
   'notifications', 'notices', 'reports', 'exports', 'audit_logs', 'users',
   'roles', 'public_content', 'offline_sync', 'backups', 'attendance',
   'leave_requests', 'meal_attendance', 'meal_subscriptions', 'student_documents',
+  'resident_portal',
 ];
 
 const ACTIONS = [
@@ -64,6 +66,7 @@ const ROLE_PERMISSIONS: Record<string, Array<{ module: string; actions: Action[]
     { module: 'meal_attendance', actions: ['view'] },
     { module: 'meal_subscriptions', actions: ['view', 'create', 'edit', 'manage_settings'] },
     { module: 'student_documents', actions: ['view', 'create', 'edit', 'delete'] },
+    { module: 'offline_sync', actions: ['view'] },
     { module: 'allocations', actions: ['view', 'assign'] },
     { module: 'exports', actions: ['export'] },
     { module: 'reports',       actions: ['view'] },
@@ -113,10 +116,7 @@ const ROLE_PERMISSIONS: Record<string, Array<{ module: string; actions: Action[]
     { module: 'notices',       actions: ['view'] },
   ],
   'Resident': [
-    { module: 'residents',     actions: ['view'] },
-    { module: 'invoices',      actions: ['view'] },
-    { module: 'payments',      actions: ['view', 'create'] },
-    { module: 'payment_proofs',actions: ['view', 'create'] },
+    { module: 'resident_portal', actions: ['view', 'create', 'edit'] },
     { module: 'complaints',    actions: ['view', 'create'] },
     { module: 'gate_passes',   actions: ['view', 'create'] },
     { module: 'attendance',    actions: ['view'] },
@@ -135,7 +135,6 @@ for (const [roleName, permissions] of Object.entries(ROLE_PERMISSIONS)) {
     permissions.push(
       { module: 'branches', actions: ['view'] },
       { module: 'users', actions: ['view'] },
-      { module: 'offline_sync', actions: ['view'] },
       { module: 'notifications', actions: ['view'] },
     );
   }
@@ -919,6 +918,7 @@ async function seedOperationalData(
 }
 
 async function main() {
+  assertSeedAllowed();
   console.log('HMS Seed — Phase 1');
   await ensurePermissions();
 

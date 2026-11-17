@@ -38,7 +38,7 @@ export class ResidentsController {
   }
 
   @Get('me')
-  @RequirePermission('residents', 'view')
+  @RequirePermission('resident_portal', 'view')
   getMyResident(
     @Param('branchId', ParseUUIDPipe) branchId: string,
     @CurrentUser() user: RequestUser,
@@ -47,7 +47,7 @@ export class ResidentsController {
   }
 
   @Patch('me')
-  @RequirePermission('residents', 'view')
+  @RequirePermission('resident_portal', 'edit')
   updateMyProfile(
     @Param('branchId', ParseUUIDPipe) branchId: string,
     @CurrentUser() user: RequestUser,

@@ -84,6 +84,7 @@ export class AuthController {
   @Post('refresh')
   @Public()
   @HttpCode(HttpStatus.OK)
+  @Throttle({ default: { ttl: 60_000, limit: 10 } })
   async refresh(
     @Req() req: Request,
     @Body() dto: RefreshDto,
@@ -203,6 +204,8 @@ export class AuthController {
   private refreshCookie(request: Request): string | undefined {
     const cookie = (request as Request & { cookies?: Record<string, unknown> })
       .cookies?.[REFRESH_COOKIE];
-    return typeof cookie === 'string' ? cookie : undefined;
+    if (typeof cookie !== 'string') return undefined;
+    const normalized = cookie.trim();
+    return normalized.length > 0 ? normalized : undefined;
   }
 }

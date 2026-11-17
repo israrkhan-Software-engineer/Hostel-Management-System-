@@ -1,6 +1,6 @@
 'use client';
 
-import { FormEvent, useEffect, useMemo, useState } from 'react';
+import { FormEvent, useCallback, useEffect, useMemo, useState } from 'react';
 import { apiDownload, apiRequest, apiUpload } from '@/lib/api/client';
 
 type ServicePermission = string;
@@ -140,7 +140,10 @@ export default function HostelServicesPanel({
   permissions?: ServicePermission[];
 }) {
   const permissionSet = useMemo(() => new Set(permissions), [permissions]);
-  const has = (module: string, action: string) => permissionSet.has(`${module}:${action}`);
+  const has = useCallback(
+    (module: string, action: string) => permissionSet.has(`${module}:${action}`),
+    [permissionSet],
+  );
   const tabs = useMemo(() => {
     const available: ServiceTab[] = [
       ...(has('attendance', 'view') ? ['attendance' as const] : []),
@@ -153,7 +156,7 @@ export default function HostelServicesPanel({
       ...(mode === 'staff' && has('exports', 'export') ? ['exports' as const] : []),
     ];
     return available;
-  }, [mode, permissionSet]);
+  }, [has, mode]);
   const [tab, setTab] = useState<ServiceTab>('attendance');
   const [residents, setResidents] = useState<Resident[]>([]);
   const [beds, setBeds] = useState<Bed[]>([]);
@@ -283,8 +286,10 @@ export default function HostelServicesPanel({
           if (!active) return;
           setBeds(availableBeds);
           setTransfers(history);
-          if (!transferForm.bedId && availableBeds[0]) {
-            setTransferForm((current) => ({ ...current, bedId: availableBeds[0].id }));
+          if (availableBeds[0]) {
+            setTransferForm((current) => current.bedId
+              ? current
+              : { ...current, bedId: availableBeds[0].id });
           }
         }
       } catch (reason) {
