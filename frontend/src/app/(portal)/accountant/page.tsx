@@ -1,3 +1,5 @@
-export default function DashboardPage() {
-  return <main><h1>accountant Portal</h1><p>Phase 0 placeholder</p></main>;
+import Phase2Workspace from '@/components/phase2-workspace';
+
+export default function AccountantPage() {
+  return <Phase2Workspace />;
 }

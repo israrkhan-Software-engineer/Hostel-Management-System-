@@ -12,6 +12,7 @@ import AccountSecurityPanel from './account-security-panel';
 import HostelServicesPanel from './hostel-services-panel';
 import NotificationCenter from './notification-center';
 import StudentFeesPanel from './student-fees-panel';
+import ThemeToggle from './ui/theme-toggle';
 import {
   addQueuedComplaint,
   complaintOutboxKey,
@@ -549,8 +550,8 @@ export default function StudentPortal() {
   return (
     <>
       <header className="workspace-header">
-        <Link className="brand" href="/">HMS <span>Student Portal</span></Link>
-        <div className="button-row">
+        <Link className="brand-lockup brand" href="/">HMS <span>Student Portal</span></Link>
+        <div className="button-row" style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
           {branches.length > 1 && (
             <label>
               Hostel branch
@@ -563,6 +564,7 @@ export default function StudentPortal() {
             </label>
           )}
           <NotificationCenter />
+          <ThemeToggle />
           <button className="button secondary small" type="button" onClick={() => void signOut()}>Sign out</button>
         </div>
       </header>

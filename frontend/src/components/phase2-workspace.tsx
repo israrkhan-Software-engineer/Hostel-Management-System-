@@ -10,6 +10,7 @@ import HostelServicesPanel from './hostel-services-panel';
 import NotificationCenter from './notification-center';
 import FinanceManagementPanel from './finance-management-panel';
 import TenantManagementPanel from './tenant-management-panel';
+import ThemeToggle from './ui/theme-toggle';
 import { getFinanceSubmissionKey, resetFormOnSuccess } from '@/lib/finance/submission';
 import {
   dashboardCacheKey,
@@ -1119,7 +1120,8 @@ export default function Phase2Workspace() {
         <div className="workspace-user">
           {isOnline && <span>{profile.email || profile.phone || profile.roles.join(', ')}</span>}
           {isOnline && <NotificationCenter />}
-          <button className="button secondary" type="button" onClick={() => void signOut()}>Sign out</button>
+          <ThemeToggle />
+          <button className="button secondary small" type="button" onClick={() => void signOut()}>Sign out</button>
         </div>
       </header>
       <div className="workspace-content">
@@ -1885,13 +1887,37 @@ export default function Phase2Workspace() {
                         <div><h3>Branch dashboard</h3></div>
                         <span className={`status ${isOnline ? 'approved' : 'pending'}`}>{isOnline ? 'ONLINE' : 'READ ONLY'}</span>
                       </div>
-                      <div className="finance-summary">
-                        <span>Active residents: <strong>{offlineDashboard.activeResidents}</strong></span>
-                        <span>Occupied beds: <strong>{offlineDashboard.occupiedBeds}</strong></span>
-                        <span>Available beds: <strong>{offlineDashboard.availableBeds}</strong></span>
-                        <span>Pending admissions: <strong>{offlineDashboard.pendingAdmissions}</strong></span>
-                        <span>Open complaints: <strong>{offlineDashboard.openComplaints}</strong></span>
-                        <span>Pending visitors: <strong>{offlineDashboard.pendingVisitorVisits}</strong></span>
+                      <div className="stats">
+                        <div className="stat accent">
+                          <div className="label"><span>Active residents</span></div>
+                          <div className="value">{offlineDashboard.activeResidents}</div>
+                          <div className="hint">In-house boarders</div>
+                        </div>
+                        <div className="stat">
+                          <div className="label"><span>Occupied beds</span></div>
+                          <div className="value">{offlineDashboard.occupiedBeds}</div>
+                          <div className="hint">Allocated beds</div>
+                        </div>
+                        <div className="stat">
+                          <div className="label"><span>Available beds</span></div>
+                          <div className="value">{offlineDashboard.availableBeds}</div>
+                          <div className="hint">Ready for allotment</div>
+                        </div>
+                        <div className="stat">
+                          <div className="label"><span>Pending admissions</span></div>
+                          <div className="value">{offlineDashboard.pendingAdmissions}</div>
+                          <div className="hint">Awaiting review</div>
+                        </div>
+                        <div className="stat">
+                          <div className="label"><span>Open complaints</span></div>
+                          <div className="value">{offlineDashboard.openComplaints}</div>
+                          <div className="hint">Requires resolution</div>
+                        </div>
+                        <div className="stat">
+                          <div className="label"><span>Pending visitors</span></div>
+                          <div className="value">{offlineDashboard.pendingVisitorVisits}</div>
+                          <div className="hint">Gate logs</div>
+                        </div>
                       </div>
                       <p>Snapshot captured {new Date(offlineDashboard.capturedAt).toLocaleString()}.</p>
                     </>

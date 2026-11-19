@@ -20,7 +20,7 @@ const nextConfig = {
 
   // API rewrites for dev (production uses nginx)
   async rewrites() {
-    return process.env.NODE_ENV === 'development'
+    return process.env.NODE_ENV === 'development' && process.env.NEXT_PUBLIC_API_URL
       ? [{ source: '/api/:path*', destination: `${process.env.NEXT_PUBLIC_API_URL}/api/:path*` }]
       : [];
   },

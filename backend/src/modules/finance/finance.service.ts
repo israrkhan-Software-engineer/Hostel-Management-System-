@@ -195,34 +195,6 @@ export class FinanceService {
             return { id: existing.id, created: false };
           }
 
-          const [invoiceAmount, verifiedPayments, pendingPayments, refunds] = await Promise.all([
-            tx.invoiceLine.aggregate({
-              where: { tenantId, branchId, invoiceId },
-              _sum: { lineAmountMinor: true },
-            }),
-            tx.payment.aggregate({
-              where: { tenantId, branchId, invoiceId, status: 'VERIFIED' },
-              _sum: { amountMinor: true },
-            }),
-            tx.payment.aggregate({
-              where: { tenantId, branchId, invoiceId, status: 'PENDING' },
-              _sum: { amountMinor: true },
-            }),
-            tx.refund.aggregate({
-              where: { tenantId, branchId, invoiceId },
-              _sum: { amountMinor: true },
-            }),
-          ]);
-          const due = Math.max(
-            (invoiceAmount._sum.lineAmountMinor ?? 0)
-              - (verifiedPayments._sum.amountMinor ?? 0)
-              + (refunds._sum.amountMinor ?? 0)
-              - (pendingPayments._sum.amountMinor ?? 0),
-            0,
-          );
-          if (dto.amountMinor > due) {
-            throw new BadRequestException('Payment amount exceeds the invoice balance available for verification');
-          }
           const payment = await tx.payment.create({
             data: {
               tenantId,

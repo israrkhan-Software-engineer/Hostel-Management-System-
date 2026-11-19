@@ -65,11 +65,11 @@ export default function StudentFeesPanel({
                     ))}
                   </div>
                 )}
-                {invoice.status === 'ISSUED' && payableMinor > 0 && (
+                {invoice.status === 'ISSUED' && invoice.balanceDueMinor > 0 && (
                   <details className="finance-action">
-                    <summary>Upload payment proof · up to {formatMoney(payableMinor, invoice.currency)}</summary>
+                    <summary>Upload payment proof</summary>
                     <form className="stack-form" onSubmit={(event) => onSubmitPayment(event, invoice)}>
-                      <label>Amount paid<input name="amount" required type="number" min={0.01} max={payableMinor / 100} step={0.01} /></label>
+                      <label>Amount paid<input name="amount" required type="number" min={0.01} step={0.01} defaultValue={payableMinor > 0 ? (payableMinor / 100).toFixed(2) : undefined} /></label>
                       <label>Payment method<select name="method" defaultValue="BANK_TRANSFER"><option value="BANK_TRANSFER">Bank transfer</option><option value="MOBILE_WALLET">Mobile wallet</option><option value="CASH">Cash</option></select></label>
                       <label>Transaction reference<input name="reference" maxLength={200} /></label>
                       <label>Notes<textarea name="proofNotes" maxLength={1000} rows={2} /></label>
