@@ -13,6 +13,7 @@ import HostelServicesPanel from './hostel-services-panel';
 import NotificationCenter from './notification-center';
 import StudentFeesPanel from './student-fees-panel';
 import ThemeToggle from './ui/theme-toggle';
+import { Icon } from './ui/icon';
 import {
   addQueuedComplaint,
   complaintOutboxKey,
@@ -64,14 +65,14 @@ type StudentTab = 'dashboard' | 'profile' | 'room' | 'fees' | 'complaints' | 'no
 
 const dayNames = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'];
 const meals = ['BREAKFAST', 'LUNCH', 'DINNER'] as const;
-const studentTabs: Array<{ id: StudentTab; label: string }> = [
-  { id: 'dashboard', label: 'Dashboard' },
-  { id: 'profile', label: 'My Profile' },
-  { id: 'room', label: 'My Room' },
-  { id: 'fees', label: 'Fees & Payments' },
-  { id: 'complaints', label: 'Complaints' },
-  { id: 'notifications', label: 'Notifications' },
-  { id: 'services', label: 'Student services' },
+const studentTabs: Array<{ id: StudentTab; label: string; icon: string }> = [
+  { id: 'dashboard', label: 'Dashboard', icon: 'home' },
+  { id: 'profile', label: 'My Profile', icon: 'users' },
+  { id: 'room', label: 'My Room', icon: 'bed' },
+  { id: 'fees', label: 'Fees & Payments', icon: 'receipt' },
+  { id: 'complaints', label: 'Complaints', icon: 'alert' },
+  { id: 'notifications', label: 'Notifications', icon: 'bell' },
+  { id: 'services', label: 'Student services', icon: 'check' },
 ];
 
 function studentLoginPath() {
@@ -535,6 +536,24 @@ export default function StudentPortal() {
     })),
   ];
 
+  const formattedToday = useMemo(() => {
+    const d = new Date();
+    return d.toLocaleDateString('en-GB', { weekday: 'long', day: 'numeric', month: 'long' });
+  }, []);
+
+  const currentBranch = useMemo(() => {
+    return branches.find((branch) => branch.id === branchId) ?? branches[0] ?? null;
+  }, [branches, branchId]);
+
+  const studentInitials = useMemo(() => {
+    if (resident?.firstName && resident?.lastName) {
+      return `${resident.firstName[0]}${resident.lastName[0]}`.toUpperCase();
+    }
+    if (resident?.firstName) return resident.firstName.slice(0, 2).toUpperCase();
+    if (profile?.email) return profile.email.slice(0, 2).toUpperCase();
+    return 'ST';
+  }, [resident, profile]);
+
   async function signOut() {
     const response = await apiRequest('/auth/logout', { method: 'POST', body: JSON.stringify({}) });
     if (!response.ok && response.status !== 401) {
@@ -548,61 +567,123 @@ export default function StudentPortal() {
   if (loading && !profile) return <main className="workspace-loading" aria-live="polite">Loading your student portal…</main>;
 
   return (
-    <>
-      <header className="workspace-header">
-        <Link className="brand-lockup brand" href="/">HMS <span>Student Portal</span></Link>
-        <div className="button-row" style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
-          {branches.length > 1 && (
-            <label>
-              Hostel branch
-              <select value={branchId} onChange={(event) => {
-                setBranchId(event.target.value);
-                sessionStorage.setItem('hms-branch', event.target.value);
-              }}>
-                {branches.map((branch) => <option key={branch.id} value={branch.id}>{branch.name}</option>)}
-              </select>
-            </label>
-          )}
-          <NotificationCenter />
-          <ThemeToggle />
-          <button className="button secondary small" type="button" onClick={() => void signOut()}>Sign out</button>
+    <div className="workspace-layout">
+      {/* Abmanix Dark Ink Sidebar for Student Portal */}
+      <aside className="workspace-sidebar" aria-label="Student portal navigation">
+        <div className="sidebar-brand-block">
+          <Link className="sidebar-brand-info" href="/">
+            <span className="sidebar-brand-mark">H</span>
+            <div className="sidebar-brand-text">
+              <strong>{currentBranch ? currentBranch.name : 'Hostel Operations'}</strong>
+              <span>Student Portal</span>
+            </div>
+          </Link>
         </div>
-      </header>
-      <main className="workspace-content">
-        <div className="workspace-title">
-          <div>
-            <span className="eyebrow">STUDENT PORTAL</span>
-            <h1>{resident ? `Welcome, ${resident.firstName}` : 'Welcome to your hostel'}</h1>
-            <p>{branches.find((branch) => branch.id === branchId)?.name ?? 'Your hostel information'}</p>
+
+        <div className="sidebar-section-heading">STUDENT PORTAL</div>
+        {studentTabs.map((tab) => (
+          <button
+            type="button"
+            key={tab.id}
+            className={`sidebar-nav-btn${activeTab === tab.id ? ' active' : ''}`}
+            aria-current={activeTab === tab.id ? 'page' : undefined}
+            onClick={() => setActiveTab(tab.id)}
+          >
+            <Icon name={tab.icon} size={16} />
+            {tab.label}
+            {tab.id === 'notifications' && notifications.length > 0 && (
+              <span className="count-pill" style={{ marginLeft: 'auto', fontSize: '11px', padding: '2px 7px' }}>
+                {notifications.length}
+              </span>
+            )}
+          </button>
+        ))}
+
+        <div className="sidebar-footer-card">
+          <div className="sidebar-user-pill">
+            <div className="sidebar-user-avatar">{studentInitials}</div>
+            <div className="sidebar-user-info">
+              <strong>{resident ? `${resident.firstName} ${resident.lastName}` : profile?.email?.split('@')[0] || 'Student'}</strong>
+              <span>Resident</span>
+            </div>
+            <button
+              type="button"
+              className="icon-btn"
+              style={{ width: '28px', height: '28px' }}
+              onClick={() => void signOut()}
+              title="Sign out"
+              aria-label="Sign out"
+            >
+              <Icon name="signout" size={14} />
+            </button>
           </div>
-          {branches.length === 1 && <span className="count-pill">{branches[0].name}</span>}
+          <div className="sidebar-powered-by">Powered by HMS Operations</div>
         </div>
-        {profile && (
-          <AccountSecurityPanel
-            mfaEnabled={profile.mfaEnabled}
-            onMfaEnabled={() => setProfile((current) => current ? { ...current, mfaEnabled: true } : current)}
-          />
-        )}
-        {error && <p className="form-error" role="alert">{error}</p>}
-        {message && <p className="success-message" role="status">{message}</p>}
-        {branches.length === 0 && !loading && <section className="panel"><h2>No hostel branch assigned</h2><p>Please contact your hostel administration to finish setting up your student account.</p></section>}
-        {branchId && loading && <section className="panel" aria-live="polite">Loading hostel information…</section>}
-        {branchId && !loading && (
-          <>
-            <nav className="workspace-tabs student-tabs" aria-label="Student portal sections">
-              {studentTabs.map((tab) => (
-                <button
-                  type="button"
-                  key={tab.id}
-                  className={activeTab === tab.id ? 'active' : ''}
-                  aria-current={activeTab === tab.id ? 'page' : undefined}
-                  onClick={() => setActiveTab(tab.id)}
+      </aside>
+
+      {/* Main Center Workspace Area */}
+      <div className="workspace-main-area">
+        <header className="workspace-topbar">
+          <div className="topbar-date">{formattedToday}</div>
+          <div className="topbar-right-actions">
+            {isOnline ? (
+              <span className="sync-status-badge">
+                <span className="sync-status-dot" />
+                Online
+              </span>
+            ) : (
+              <span className="status danger">Offline Mode</span>
+            )}
+            <ThemeToggle />
+            <NotificationCenter />
+            {branches.length > 1 && (
+              <label style={{ display: 'inline-flex', alignItems: 'center', gap: '8px', fontSize: '13px', margin: 0, fontWeight: 600 }}>
+                Hostel branch
+                <select
+                  className="field-inline"
+                  style={{ width: 'auto', minWidth: '150px', padding: '6px 10px', fontSize: '13px' }}
+                  value={branchId}
+                  onChange={(event) => {
+                    setBranchId(event.target.value);
+                    sessionStorage.setItem('hms-branch', event.target.value);
+                  }}
                 >
-                  {tab.label}
-                  {tab.id === 'notifications' && notifications.length > 0 && <span className="tab-count">{notifications.length}</span>}
-                </button>
-              ))}
-            </nav>
+                  {branches.map((branch) => (
+                    <option key={branch.id} value={branch.id}>
+                      {branch.name}
+                    </option>
+                  ))}
+                </select>
+              </label>
+            )}
+          </div>
+        </header>
+
+        <main className="workspace-content">
+          <div className="workspace-title">
+            <div>
+              <span className="eyebrow">STUDENT PORTAL</span>
+              <h1>{resident ? `Welcome, ${resident.firstName}` : 'Welcome to your hostel'}</h1>
+              <p>{currentBranch?.name ?? 'Your hostel information'}</p>
+            </div>
+            {branches.length === 1 && <span className="count-pill">{branches[0].name}</span>}
+          </div>
+          {profile && (
+            <AccountSecurityPanel
+              mfaEnabled={profile.mfaEnabled}
+              onMfaEnabled={() => setProfile((current) => current ? { ...current, mfaEnabled: true } : current)}
+            />
+          )}
+          {error && <p className="form-error" role="alert">{error}</p>}
+          {message && <p className="success-message" role="status">{message}</p>}
+          {branches.length === 0 && !loading && (
+            <section className="panel">
+              <h2>No hostel branch assigned</h2>
+              <p>Please contact your hostel administration to finish setting up your student account.</p>
+            </section>
+          )}
+          {branchId && loading && <section className="panel" aria-live="polite">Loading hostel information…</section>}
+          {branchId && !loading && (
             <div className="content-grid student-content-grid">
               {activeTab === 'services' && (
                 <div className="student-section">
@@ -793,9 +874,9 @@ export default function StudentPortal() {
                 </section>
               )}
             </div>
-          </>
-        )}
-      </main>
-    </>
+          )}
+        </main>
+      </div>
+    </div>
   );
 }
