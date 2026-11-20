@@ -1,4 +1,6 @@
 import Link from 'next/link';
+import ThemeToggle from '@/components/ui/theme-toggle';
+import Icon from '@/components/ui/icon';
 
 export default function HomePage() {
   return (
@@ -6,8 +8,9 @@ export default function HomePage() {
       <header className="public-header">
         <Link className="brand-lockup" href="/">HMS <span>Hostel Management</span></Link>
         <div style={{ display: 'flex', gap: '12px', alignItems: 'center' }}>
+          <ThemeToggle />
           <Link className="button secondary" href="/login">Staff sign in</Link>
-          <Link className="button secondary" href="/student-login">Student Login</Link>
+          <Link className="button accent" href="/student-login">Student Login</Link>
         </div>
       </header>
       <section className="public-hero">
@@ -15,9 +18,12 @@ export default function HomePage() {
         <h1>Hostel operations,<br /><span>all in one place.</span></h1>
         <p>Manage admissions, resident records, rooms, and bed occupancy with one secure workspace.</p>
         <div className="hero-actions">
-          <Link className="button primary" href="/login">Staff sign in</Link>
+          <Link className="button accent" href="/login">
+            <Icon name="arrowRight" size={16} />
+            Staff sign in
+          </Link>
           <Link className="button secondary" href="/student-login">Student Login</Link>
-          <Link className="quiet-link" href="#features">Explore the platform</Link>
+          <Link className="quiet-link" href="#features">Explore features</Link>
         </div>
       </section>
       <section id="features" className="public-features">

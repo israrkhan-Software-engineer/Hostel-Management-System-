@@ -11,6 +11,7 @@ import NotificationCenter from './notification-center';
 import FinanceManagementPanel from './finance-management-panel';
 import TenantManagementPanel from './tenant-management-panel';
 import ThemeToggle from './ui/theme-toggle';
+import Icon from './ui/icon';
 import { getFinanceSubmissionKey, resetFormOnSuccess } from '@/lib/finance/submission';
 import {
   dashboardCacheKey,
@@ -164,7 +165,7 @@ type VisitorVisit = {
   checkedOutAt: string | null;
   createdAt: string;
 };
-type Section = 'admissions' | 'residents' | 'inventory' | 'finance' | 'mess' | 'complaints' | 'notices' | 'visitors' | 'services' | 'people' | 'offline';
+type Section = 'dashboard' | 'admissions' | 'residents' | 'inventory' | 'finance' | 'mess' | 'complaints' | 'notices' | 'visitors' | 'services' | 'people' | 'offline';
 
 const emptyResident = { firstName: '', lastName: '', phone: '', email: '', dateOfBirth: '', cnic: '' };
 const emptyInvoiceLine = { description: '', quantity: '1', amount: '' };
@@ -207,7 +208,7 @@ export default function Phase2Workspace() {
   const [branches, setBranches] = useState<Branch[]>([]);
   const [branchId, setBranchId] = useState('');
   const [branchForm, setBranchForm] = useState({ name: '', code: '' });
-  const [section, setSection] = useState<Section>('admissions');
+  const [section, setSection] = useState<Section>('dashboard');
   const [menuWeek, setMenuWeek] = useState(dateInput(mondayOf(today)));
   const [menuEntries, setMenuEntries] = useState<Record<string, string>>({});
   const [complaints, setComplaints] = useState<Complaint[]>([]);
@@ -259,6 +260,7 @@ export default function Phase2Workspace() {
     permissions.has(`${module}:${action}`)
   ), [permissions]);
   const availableSections = useMemo<Section[]>(() => [
+    'dashboard' as const,
     ...(permissions.has('admissions:view') || permissions.has('admissions:create') ? ['admissions' as const] : []),
     ...(permissions.has('residents:view') ? ['residents' as const] : []),
     ...(permissions.has('inventory:view') ? ['inventory' as const] : []),
@@ -279,6 +281,41 @@ export default function Phase2Workspace() {
     () => (isOnline ? availableSections : ['offline']),
     [availableSections, isOnline],
   );
+
+  const formattedToday = useMemo(() => {
+    try {
+      return new Intl.DateTimeFormat('en-US', {
+        weekday: 'long',
+        day: 'numeric',
+        month: 'long',
+      }).format(new Date());
+    } catch {
+      return 'Today';
+    }
+  }, []);
+
+  const greeting = useMemo(() => {
+    const hour = new Date().getHours();
+    if (hour < 12) return 'Good morning';
+    if (hour < 18) return 'Good afternoon';
+    return 'Good evening';
+  }, []);
+
+  const userInitials = useMemo(() => {
+    if (!profile) return 'ST';
+    const emailPrefix = (profile.email || '').split('@')[0];
+    if (emailPrefix) return emailPrefix.slice(0, 2).toUpperCase();
+    if (profile.roles.length) return profile.roles[0].slice(0, 2).toUpperCase();
+    return 'ST';
+  }, [profile]);
+
+  const currentBranch = useMemo(() => {
+    return branches.find((b) => b.id === branchId) || branches[0];
+  }, [branches, branchId]);
+
+  const canShow = useCallback((sec: Section) => {
+    return visibleSections.includes(sec);
+  }, [visibleSections]);
 
   async function createBranch(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -1114,70 +1151,404 @@ export default function Phase2Workspace() {
   if (!profile) return <main className="workspace-loading"><p role="alert">{error || 'Please sign in to continue.'}</p></main>;
 
   return (
-    <main className="workspace-page">
-      <header className="workspace-header">
-        <Link className="brand-lockup" href="/">HMS <span>Operations</span></Link>
-        <div className="workspace-user">
-          {isOnline && <span>{profile.email || profile.phone || profile.roles.join(', ')}</span>}
-          {isOnline && <NotificationCenter />}
-          <ThemeToggle />
-          <button className="button secondary small" type="button" onClick={() => void signOut()}>Sign out</button>
+    <div className="workspace-layout">
+      {/* Permanent Dark Ink Sidebar matching Screenshot 1 */}
+      <aside className="workspace-sidebar" aria-label="Hostel navigation">
+        <div className="sidebar-brand-block">
+          <Link className="sidebar-brand-info" href="/">
+            <span className="sidebar-brand-mark">H</span>
+            <div className="sidebar-brand-text">
+              <strong>{currentBranch ? currentBranch.name : 'Hostel Operations'}</strong>
+              <span>{currentBranch ? `${currentBranch.code} · Active` : 'All branches'}</span>
+            </div>
+          </Link>
         </div>
-      </header>
-      <div className="workspace-content">
-        {!isOnline && (
-          <div className="notice error" role="status">
-            Offline — cached dashboard counts are available. Staff changes are blocked; student complaint submissions can queue in the student portal.
-          </div>
+
+        {/* FRONT DESK Section */}
+        <div className="sidebar-section-heading">FRONT DESK</div>
+        {canShow('dashboard') && (
+          <button
+            type="button"
+            className={`sidebar-nav-btn${section === 'dashboard' ? ' active' : ''}`}
+            onClick={() => setSection('dashboard')}
+          >
+            <Icon name="home" size={16} />
+            Dashboard
+          </button>
         )}
-        <div className="workspace-title">
-        <div><span className="eyebrow">HOSTEL WORKSPACE</span><h1>Hostel operations</h1></div>
-          {branches.length > 0 && (
-            <label className="branch-picker">Branch
-              <select value={branchId} onChange={(event) => setBranchId(event.target.value)}>
-                {branches.map((branch) => <option key={branch.id} value={branch.id}>{branch.name} · {branch.code}</option>)}
+        {canShow('admissions') && (
+          <button
+            type="button"
+            className={`sidebar-nav-btn${section === 'admissions' ? ' active' : ''}`}
+            onClick={() => setSection('admissions')}
+          >
+            <Icon name="login" size={16} />
+            Admissions
+          </button>
+        )}
+        {canShow('residents') && (
+          <button
+            type="button"
+            className={`sidebar-nav-btn${section === 'residents' ? ' active' : ''}`}
+            onClick={() => setSection('residents')}
+          >
+            <Icon name="users" size={16} />
+            Residents
+          </button>
+        )}
+        {canShow('inventory') && (
+          <button
+            type="button"
+            className={`sidebar-nav-btn${section === 'inventory' ? ' active' : ''}`}
+            onClick={() => setSection('inventory')}
+          >
+            <Icon name="bed" size={16} />
+            Rooms & Beds
+          </button>
+        )}
+        {canShow('visitors') && (
+          <button
+            type="button"
+            className={`sidebar-nav-btn${section === 'visitors' ? ' active' : ''}`}
+            onClick={() => setSection('visitors')}
+          >
+            <Icon name="shield" size={16} />
+            Visitors & Gate
+          </button>
+        )}
+
+        {/* ACCOUNTS Section */}
+        {canShow('finance') && (
+          <>
+            <div className="sidebar-section-heading">ACCOUNTS</div>
+            <button
+              type="button"
+              className={`sidebar-nav-btn${section === 'finance' ? ' active' : ''}`}
+              onClick={() => setSection('finance')}
+            >
+              <Icon name="receipt" size={16} />
+              Rent & Invoices
+            </button>
+          </>
+        )}
+
+        {/* SERVICES Section */}
+        {(canShow('mess') || canShow('complaints') || canShow('notices') || canShow('services')) && (
+          <>
+            <div className="sidebar-section-heading">SERVICES</div>
+            {canShow('mess') && (
+              <button
+                type="button"
+                className={`sidebar-nav-btn${section === 'mess' ? ' active' : ''}`}
+                onClick={() => setSection('mess')}
+              >
+                <Icon name="coffee" size={16} />
+                Mess & Dining
+              </button>
+            )}
+            {canShow('complaints') && (
+              <button
+                type="button"
+                className={`sidebar-nav-btn${section === 'complaints' ? ' active' : ''}`}
+                onClick={() => setSection('complaints')}
+              >
+                <Icon name="alert" size={16} />
+                Complaints
+              </button>
+            )}
+            {canShow('notices') && (
+              <button
+                type="button"
+                className={`sidebar-nav-btn${section === 'notices' ? ' active' : ''}`}
+                onClick={() => setSection('notices')}
+              >
+                <Icon name="fileText" size={16} />
+                Hostel Notices
+              </button>
+            )}
+            {canShow('services') && (
+              <button
+                type="button"
+                className={`sidebar-nav-btn${section === 'services' ? ' active' : ''}`}
+                onClick={() => setSection('services')}
+              >
+                <Icon name="check" size={16} />
+                Attendance & Passes
+              </button>
+            )}
+          </>
+        )}
+
+        {/* MANAGEMENT Section */}
+        {(canShow('people') || canShow('offline')) && (
+          <>
+            <div className="sidebar-section-heading">MANAGEMENT</div>
+            {canShow('people') && (
+              <button
+                type="button"
+                className={`sidebar-nav-btn${section === 'people' ? ' active' : ''}`}
+                onClick={() => setSection('people')}
+              >
+                <Icon name="shield" size={16} />
+                Staff & Roles
+              </button>
+            )}
+            {canShow('offline') && (
+              <button
+                type="button"
+                className={`sidebar-nav-btn${section === 'offline' ? ' active' : ''}`}
+                onClick={() => setSection('offline')}
+              >
+                <Icon name="refresh" size={16} />
+                Offline Mode
+              </button>
+            )}
+          </>
+        )}
+
+        {/* User Footer Pill */}
+        <div className="sidebar-footer-card">
+          <div className="sidebar-user-pill">
+            <div className="sidebar-user-avatar">{userInitials}</div>
+            <div className="sidebar-user-info">
+              <strong>{profile.email?.split('@')[0] || profile.roles[0] || 'Staff'}</strong>
+              <span>Signed in</span>
+            </div>
+            <button
+              type="button"
+              className="icon-btn"
+              style={{ width: '28px', height: '28px' }}
+              onClick={() => void signOut()}
+              title="Sign out"
+              aria-label="Sign out"
+            >
+              <Icon name="signout" size={14} />
+            </button>
+          </div>
+          <div className="sidebar-powered-by">Powered by HMS Operations</div>
+        </div>
+      </aside>
+
+      {/* Main Workspace Area */}
+      <div className="workspace-main-area">
+        {/* Top Frosted Bar matching Screenshot 1 */}
+        <header className="workspace-topbar">
+          <div className="topbar-date">{formattedToday}</div>
+          <div className="topbar-right-actions">
+            {isOnline ? (
+              <span className="sync-status-badge">
+                <span className="sync-status-dot" />
+                All attendance synced
+              </span>
+            ) : (
+              <span className="status danger">Offline Mode</span>
+            )}
+            <ThemeToggle />
+            {isOnline && <NotificationCenter />}
+            {branches.length > 0 && (
+              <select
+                className="field-inline"
+                style={{ width: 'auto', minWidth: '160px', padding: '6px 10px', fontSize: '13px' }}
+                value={branchId}
+                onChange={(event) => setBranchId(event.target.value)}
+              >
+                {branches.map((b) => (
+                  <option key={b.id} value={b.id}>
+                    {b.name} ({b.code})
+                  </option>
+                ))}
               </select>
-            </label>
-          )}
-          {can('branches', 'create') && (
-            <form className="branch-create-form" onSubmit={(event) => void createBranch(event)}>
-              <label>New branch name
-                <input required minLength={2} maxLength={120} value={branchForm.name}
-                  onChange={(event) => setBranchForm({ ...branchForm, name: event.target.value })} />
-              </label>
-              <label>Code
-                <input required minLength={2} maxLength={30} pattern="[A-Za-z0-9_-]+"
-                  value={branchForm.code} onChange={(event) => setBranchForm({ ...branchForm, code: event.target.value })} />
-              </label>
-              <button className="button secondary small" type="submit">Add branch</button>
-            </form>
-          )}
+            )}
+          </div>
+        </header>
+
+        {/* Free trial / Announcement banner matching Screenshot 1 */}
+        <div className="free-trial-banner">
+          <Icon name="alert" size={16} />
+          <span>Operational Workspace Active · Current Branch: {currentBranch?.name || 'Main Branch'}</span>
         </div>
 
-        <AccountSecurityPanel
-          mfaEnabled={profile.mfaEnabled}
-          onMfaEnabled={() => setProfile((current) => current ? { ...current, mfaEnabled: true } : current)}
-        />
+        <div className="workspace-content">
+          {!isOnline && (
+            <div className="notice error" role="status">
+              Offline — cached dashboard counts are available. Staff changes are blocked; student complaint submissions can queue in the student portal.
+            </div>
+          )}
 
-        {!branches.length && !visibleSections.includes('people') ? (
-          <section className="panel">
-            {error && <div className="notice error" role="alert">{error}</div>}
-            {message && <div className="notice success" role="status">{message}</div>}
-            <h2>No branch access</h2>
-            <p>Your account does not have an active branch assigned. Ask an administrator to grant branch access.</p>
-          </section>
-        ) : (
-          <>
-            <nav className="workspace-tabs" aria-label="Hostel management">
-              {visibleSections.map((tab) => (
-                <button key={tab} type="button" className={section === tab ? 'active' : ''} onClick={() => setSection(tab)}>
-                  {tab[0].toUpperCase()}{tab.slice(1)}
-                </button>
-              ))}
-            </nav>
-            {error && <div className="notice error" role="alert">{error}</div>}
-            {message && <div className="notice success" role="status">{message}</div>}
-            {loading && <p className="muted">Refreshing branch data…</p>}
+          <AccountSecurityPanel
+            mfaEnabled={profile.mfaEnabled}
+            onMfaEnabled={() => setProfile((current) => current ? { ...current, mfaEnabled: true } : current)}
+          />
+
+          {!branches.length && !visibleSections.includes('people') ? (
+            <section className="panel">
+              {error && <div className="notice error" role="alert">{error}</div>}
+              {message && <div className="notice success" role="status">{message}</div>}
+              <h2>No branch access</h2>
+              <p>Your account does not have an active branch assigned. Ask an administrator to grant branch access.</p>
+            </section>
+          ) : (
+            <>
+              {error && <div className="notice error" role="alert">{error}</div>}
+              {message && <div className="notice success" role="status">{message}</div>}
+              {loading && <p className="muted">Refreshing branch data…</p>}
+
+              {/* DASHBOARD SECTION matching Screenshot 1 */}
+              {section === 'dashboard' && (
+                <div>
+                  <div className="dashboard-hero-row">
+                    <div className="dashboard-hero-title">
+                      <span className="eyebrow">DASHBOARD</span>
+                      <h1>{greeting}, {profile.email?.split('@')[0] || profile.roles[0] || 'Staff'}</h1>
+                      <p>Here is how the floor looks right now.</p>
+                    </div>
+                    <div style={{ display: 'flex', gap: '10px' }}>
+                      {can('admissions', 'create') && (
+                        <button
+                          type="button"
+                          className="button accent"
+                          onClick={() => setSection('admissions')}
+                        >
+                          <Icon name="plus" size={16} />
+                          Start admission
+                        </button>
+                      )}
+                      {can('residents', 'create') && (
+                        <button
+                          type="button"
+                          className="button secondary"
+                          onClick={() => setSection('residents')}
+                        >
+                          <Icon name="users" size={16} />
+                          Register resident
+                        </button>
+                      )}
+                    </div>
+                  </div>
+
+                  {/* 4 Stat Metric Cards matching Screenshot 1 */}
+                  <div className="dashboard-stats-grid">
+                    <article className="stat">
+                      <span className="label">
+                        <Icon name="arrowRight" size={16} />
+                        Today&apos;s admissions
+                      </span>
+                      <strong className="value mono">{admissions.length}</strong>
+                      <span className="hint">Total applications on file</span>
+                    </article>
+
+                    <article className="stat">
+                      <span className="label">
+                        <Icon name="alert" size={16} />
+                        Pending review
+                      </span>
+                      <strong className="value mono">
+                        {admissions.filter((a) => a.status === 'PENDING').length}
+                      </strong>
+                      <span className="hint">Awaiting bed allocation</span>
+                    </article>
+
+                    <article className="stat accent">
+                      <span className="label">
+                        <Icon name="users" size={16} />
+                        Active residents
+                      </span>
+                      <strong className="value mono">
+                        {residents.filter((r) => r.status === 'ACTIVE').length}
+                      </strong>
+                      <span className="hint">With a valid occupancy</span>
+                    </article>
+
+                    <article className="stat">
+                      <span className="label">
+                        <Icon name="bed" size={16} />
+                        Available beds
+                      </span>
+                      <strong className="value mono">{beds.length}</strong>
+                      <span className="hint">Ready for new allotment</span>
+                    </article>
+                  </div>
+
+                  {/* Overview Cards matching Screenshot 1 */}
+                  <div className="dashboard-overview-grid">
+                    <section className="panel">
+                      <div className="panel-head">
+                        <div>
+                          <h3>Finance & Invoices</h3>
+                          <p className="muted" style={{ margin: '2px 0 0', fontSize: '12px' }}>
+                            Last 30 days summary
+                          </p>
+                        </div>
+                        {can('invoices', 'view') && (
+                          <button
+                            type="button"
+                            className="button secondary small"
+                            onClick={() => setSection('finance')}
+                          >
+                            View all
+                          </button>
+                        )}
+                      </div>
+                      <div className="panel-body">
+                        <div style={{ display: 'grid', gap: '12px' }}>
+                          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '12px 14px', background: 'var(--color-bg-subtle)', borderRadius: 'var(--radius-md)' }}>
+                            <span>Total invoices issued</span>
+                            <strong className="mono">{invoices.length}</strong>
+                          </div>
+                          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '12px 14px', background: 'var(--color-bg-subtle)', borderRadius: 'var(--radius-md)' }}>
+                            <span>Pending balance due</span>
+                            <strong className="mono" style={{ color: 'var(--color-danger)' }}>
+                              {invoices.filter((i) => i.status === 'ISSUED' && i.balanceDueMinor > 0).length} invoices
+                            </strong>
+                          </div>
+                          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '12px 14px', background: 'var(--color-bg-subtle)', borderRadius: 'var(--radius-md)' }}>
+                            <span>Fully paid invoices</span>
+                            <strong className="mono" style={{ color: 'var(--color-success)' }}>
+                              {invoices.filter((i) => i.status === 'PAID').length}
+                            </strong>
+                          </div>
+                        </div>
+                      </div>
+                    </section>
+
+                    <section className="panel">
+                      <div className="panel-head">
+                        <div>
+                          <h3>Hostel Front Desk</h3>
+                          <p className="muted" style={{ margin: '2px 0 0', fontSize: '12px' }}>
+                            Recent gate and ticket activity
+                          </p>
+                        </div>
+                        <button
+                          type="button"
+                          className="button secondary small"
+                          onClick={() => setSection('visitors')}
+                        >
+                          Visitors log
+                        </button>
+                      </div>
+                      <div className="panel-body">
+                        <div style={{ display: 'grid', gap: '12px' }}>
+                          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '12px 14px', background: 'var(--color-bg-subtle)', borderRadius: 'var(--radius-md)' }}>
+                            <span>Visitors recorded</span>
+                            <strong className="mono">{visitorVisits.length}</strong>
+                          </div>
+                          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '12px 14px', background: 'var(--color-bg-subtle)', borderRadius: 'var(--radius-md)' }}>
+                            <span>Open maintenance tickets</span>
+                            <strong className="mono" style={{ color: complaints.some((c) => c.status === 'OPEN') ? 'var(--brand-yellow-600)' : 'inherit' }}>
+                              {complaints.filter((c) => c.status === 'OPEN').length}
+                            </strong>
+                          </div>
+                          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '12px 14px', background: 'var(--color-bg-subtle)', borderRadius: 'var(--radius-md)' }}>
+                            <span>Published notices</span>
+                            <strong className="mono">{notices.filter((n) => n.status === 'PUBLISHED').length}</strong>
+                          </div>
+                        </div>
+                      </div>
+                    </section>
+                  </div>
+                </div>
+              )}
 
             {section === 'services' && (
               <HostelServicesPanel
@@ -1190,7 +1561,15 @@ export default function Phase2Workspace() {
             {section === 'people' && <TenantManagementPanel permissions={profile?.permissions ?? []} />}
 
             {section === 'admissions' && (
-              <div className="content-grid">
+              <div>
+                <div className="dashboard-hero-row">
+                  <div className="dashboard-hero-title">
+                    <span className="eyebrow">FRONT DESK</span>
+                    <h1>Admissions</h1>
+                    <p>{admissions.length} applications on file</p>
+                  </div>
+                </div>
+                <div className="content-grid">
                 {can('admissions', 'create') && (
                   <section className="panel">
                     <h2>Start an admission</h2>
@@ -1265,10 +1644,19 @@ export default function Phase2Workspace() {
                   )}
                 </section>
               </div>
+              </div>
             )}
 
             {section === 'residents' && (
-              <div className="content-grid">
+              <div>
+                <div className="dashboard-hero-row">
+                  <div className="dashboard-hero-title">
+                    <span className="eyebrow">FRONT DESK</span>
+                    <h1>Residents</h1>
+                    <p>{residents.length} registered</p>
+                  </div>
+                </div>
+                <div className="content-grid">
                 {(can('residents', 'create') || Boolean(residentEditingId)) && (
                   <section className="panel">
                     <h2>{residentEditingId ? 'Edit resident' : 'Register a resident'}</h2>
@@ -1312,6 +1700,7 @@ export default function Phase2Workspace() {
                     </div>
                   )}
                 </section>
+              </div>
               </div>
             )}
 
@@ -1974,7 +2363,8 @@ export default function Phase2Workspace() {
             )}
           </>
         )}
+        </div>
       </div>
-    </main>
+    </div>
   );
 }
