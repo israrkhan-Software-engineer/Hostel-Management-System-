@@ -1254,48 +1254,30 @@ table .right {
   color: var(--color-text-muted);
 }
 
-/* Stepped Desktop Scale System (Eliminates Table Reflow Jitter) */
+/* Full-Width Workspace & Stepped Public Layout */
 .workspace-content,
-.platform-main,
+.platform-main {
+  width: 100%;
+  max-width: 100%;
+  padding: 24px 28px 48px;
+  margin-inline: 0;
+  box-sizing: border-box;
+}
+
 .public-hero,
 .public-features,
 .public-footer {
   width: 100%;
-  max-width: 1600px;
-  padding: 24px 16px;
+  max-width: 1440px;
+  padding: 24px 20px;
   margin-inline: auto;
+  box-sizing: border-box;
 }
 
-@media (min-width: 1024px) {
+@media (max-width: 768px) {
   .workspace-content,
   .platform-main {
-    width: 760px;
-    max-width: none;
-    padding-left: 28px;
-    padding-right: 28px;
-  }
-}
-
-@media (min-width: 1280px) {
-  .workspace-content,
-  .platform-main {
-    width: 1000px;
-    padding-left: 32px;
-    padding-right: 32px;
-  }
-}
-
-@media (min-width: 1440px) {
-  .workspace-content,
-  .platform-main {
-    width: 1160px;
-  }
-}
-
-@media (min-width: 1600px) {
-  .workspace-content,
-  .platform-main {
-    width: 1320px;
+    padding: 16px 14px 32px;
   }
 }
 
