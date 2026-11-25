@@ -9,8 +9,7 @@ export default function HomePage() {
         <Link className="brand-lockup" href="/">HMS <span>Hostel Management</span></Link>
         <div style={{ display: 'flex', gap: '12px', alignItems: 'center' }}>
           <ThemeToggle />
-          <Link className="button secondary" href="/login">Staff sign in</Link>
-          <Link className="button accent" href="/student-login">Student Login</Link>
+          <Link className="button accent" href="/login">Login</Link>
         </div>
       </header>
       <section className="public-hero">
@@ -20,9 +19,8 @@ export default function HomePage() {
         <div className="hero-actions">
           <Link className="button accent" href="/login">
             <Icon name="arrowRight" size={16} />
-            Staff sign in
+            Login
           </Link>
-          <Link className="button secondary" href="/student-login">Student Login</Link>
           <Link className="quiet-link" href="#features">Explore features</Link>
         </div>
       </section>

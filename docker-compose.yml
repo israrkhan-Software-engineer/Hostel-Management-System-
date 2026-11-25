@@ -21,7 +21,7 @@ services:
       - hms-net
     restart: unless-stopped
     healthcheck:
-      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:8080/"]
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8080/"]
       interval: 30s
       timeout: 5s
       retries: 3
@@ -106,6 +106,7 @@ services:
       dockerfile: Dockerfile
       target: migrator
     environment:
+      DATABASE_URL: ${DATABASE_MIGRATION_URL:?DATABASE_MIGRATION_URL must be set}
       DATABASE_MIGRATION_URL: ${DATABASE_MIGRATION_URL:?DATABASE_MIGRATION_URL must be set}
     depends_on:
       postgres:

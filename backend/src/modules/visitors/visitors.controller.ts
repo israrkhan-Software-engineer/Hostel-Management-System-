@@ -13,6 +13,15 @@ import { VisitorsService } from './visitors.service';
 export class VisitorsController {
   constructor(private readonly phase5: VisitorsService) {}
 
+  @Get('visitor-hosts')
+  @RequirePermission('visitors', 'view')
+  listVisitorHosts(
+    @Param('branchId', ParseUUIDPipe) branchId: string,
+    @CurrentUser() user: RequestUser,
+  ) {
+    return this.phase5.listHosts(user.tenantId, branchId);
+  }
+
   @Get('visitors')
   @RequirePermission('visitors', 'view')
   listVisitorVisits(

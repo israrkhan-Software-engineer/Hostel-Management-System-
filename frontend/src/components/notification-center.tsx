@@ -24,12 +24,13 @@ const preferenceCategories = ['admission', 'announcement', 'finance', 'gate_pass
 export default function NotificationCenter() {
   const [items, setItems] = useState<NotificationItem[]>([]);
   const [preferences, setPreferences] = useState<Preference[]>([]);
+  const [filter, setFilter] = useState<'unread' | 'all'>('unread');
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
 
   const load = useCallback(async () => {
     const [notificationsResult, preferencesResult] = await Promise.all([
-      apiRequest<NotificationItem[]>('/notifications'),
+      apiRequest<NotificationItem[] | { items: NotificationItem[] }>('/notifications'),
       apiRequest<Preference[]>('/notifications/preferences'),
     ]);
     if (!notificationsResult.ok) {
@@ -40,8 +41,14 @@ export default function NotificationCenter() {
       setError(preferencesResult.message);
       return;
     }
-    setItems(notificationsResult.data);
-    setPreferences(preferencesResult.data);
+    const rawData = notificationsResult.data;
+    const notificationList = Array.isArray(rawData)
+      ? rawData
+      : Array.isArray((rawData as { items?: NotificationItem[] })?.items)
+        ? (rawData as { items: NotificationItem[] }).items
+        : [];
+    setItems(notificationList);
+    setPreferences(Array.isArray(preferencesResult.data) ? preferencesResult.data : []);
     setError('');
   }, []);
 
@@ -52,16 +59,22 @@ export default function NotificationCenter() {
   async function markAllRead() {
     setBusy(true);
     const result = await apiRequest<{ updated: number }>('/notifications/read-all', { method: 'POST' });
-    if (!result.ok) setError(result.message);
-    else await load();
+    if (!result.ok) {
+      setError(result.message);
+    } else {
+      await load();
+    }
     setBusy(false);
   }
 
   async function markRead(id: string) {
     setBusy(true);
     const result = await apiRequest<NotificationItem>(`/notifications/${id}/read`, { method: 'PATCH' });
-    if (!result.ok) setError(result.message);
-    else setItems((current) => current.map((item) => item.id === id ? result.data : item));
+    if (!result.ok) {
+      setError(result.message);
+    } else {
+      setItems((current) => current.map((item) => (item.id === id ? result.data : item)));
+    }
     setBusy(false);
   }
 
@@ -76,7 +89,11 @@ export default function NotificationCenter() {
     else setPreferences((existing) => [...existing.filter((item) => item.category !== category), result.data]);
   }
 
-  const unreadCount = items.filter((item) => !item.readAt).length;
+  const safeItems = Array.isArray(items) ? items : [];
+  const unreadItems = safeItems.filter((item) => !item.readAt);
+  const unreadCount = unreadItems.length;
+  // On visit, show only new/unread notifications by default
+  const displayedItems = filter === 'unread' ? unreadItems : safeItems;
 
   return (
     <details className="notification-center">
@@ -85,19 +102,89 @@ export default function NotificationCenter() {
       </summary>
       <section className="notification-panel" aria-label="Notifications and preferences">
         <div className="notification-panel-heading">
-          <div><h2>Notifications</h2><p>{unreadCount} unread</p></div>
-          <button className="button secondary small" type="button" disabled={busy || unreadCount === 0} onClick={() => void markAllRead()}>
-            Mark all read
-          </button>
+          <div>
+            <h2>Notifications</h2>
+            <p>{unreadCount} unread notification{unreadCount === 1 ? '' : 's'}</p>
+          </div>
+          <div className="notification-actions">
+            <div className="notification-tab-filters" role="tablist" aria-label="Notification view">
+              <button
+                type="button"
+                className={`button small ${filter === 'unread' ? 'primary' : 'secondary'}`}
+                onClick={() => setFilter('unread')}
+                role="tab"
+                aria-selected={filter === 'unread'}
+              >
+                Unread ({unreadCount})
+              </button>
+              <button
+                type="button"
+                className={`button small ${filter === 'all' ? 'primary' : 'secondary'}`}
+                onClick={() => setFilter('all')}
+                role="tab"
+                aria-selected={filter === 'all'}
+              >
+                All ({items.length})
+              </button>
+            </div>
+            {unreadCount > 0 && (
+              <button
+                className="button secondary small"
+                type="button"
+                disabled={busy}
+                onClick={() => void markAllRead()}
+              >
+                Mark all read
+              </button>
+            )}
+          </div>
         </div>
         {error && <p className="notice error" role="alert">{error}</p>}
-        {!items.length ? <p className="empty-state">No notifications yet.</p> : (
+        {!displayedItems.length ? (
+          <p className="empty-state">
+            {filter === 'unread' ? 'No new unread notifications.' : 'No notifications yet.'}
+          </p>
+        ) : (
           <ul className="notification-list">
-            {items.map((item) => (
-              <li key={item.id} className={item.readAt ? '' : 'unread'}>
-                <div><strong>{item.title}</strong><p>{item.body}</p><small>{new Date(item.createdAt).toLocaleString()}</small></div>
+            {displayedItems.map((item) => (
+              <li
+                key={item.id}
+                className={`notification-item ${item.readAt ? 'read' : 'unread'}`}
+                onClick={() => {
+                  if (!item.readAt && !busy) {
+                    void markRead(item.id);
+                  }
+                }}
+                role="button"
+                tabIndex={0}
+                onKeyDown={(e) => {
+                  if ((e.key === 'Enter' || e.key === ' ') && !item.readAt && !busy) {
+                    e.preventDefault();
+                    void markRead(item.id);
+                  }
+                }}
+              >
+                <div className="notification-item-content">
+                  <div className="notification-item-header">
+                    <strong className="notification-title">{item.title}</strong>
+                    {!item.readAt && <span className="unread-dot" title="Unread" />}
+                  </div>
+                  <p className="notification-body">{item.body}</p>
+                  <div className="notification-meta">
+                    <span className="notification-category">{item.category.replace('_', ' ')}</span>
+                    <small>{new Date(item.createdAt).toLocaleString()}</small>
+                  </div>
+                </div>
                 {!item.readAt && (
-                  <button className="button secondary small" type="button" disabled={busy} onClick={() => void markRead(item.id)}>
+                  <button
+                    className="button secondary small notification-mark-btn"
+                    type="button"
+                    disabled={busy}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      void markRead(item.id);
+                    }}
+                  >
                     Mark read
                   </button>
                 )}
@@ -112,19 +199,19 @@ export default function NotificationCenter() {
             const preference = preferences.find((item) => item.category === category)
               ?? { category, inApp: true, email: true, sms: false };
             return (
-            <fieldset key={preference.category}>
-              <legend>{preference.category.replaceAll('_', ' ')}</legend>
-              {(['inApp', 'email', 'sms'] as const).map((field) => (
-                <label key={field}>
-                  <input
-                    type="checkbox"
-                    checked={preference[field]}
-                    onChange={(event) => void updatePreference(preference.category, field, event.target.checked)}
-                  />
-                  {field === 'inApp' ? 'In-app' : field.toUpperCase()}
-                </label>
-              ))}
-            </fieldset>
+              <fieldset key={preference.category}>
+                <legend>{preference.category.replaceAll('_', ' ')}</legend>
+                {(['inApp', 'email', 'sms'] as const).map((field) => (
+                  <label key={field}>
+                    <input
+                      type="checkbox"
+                      checked={preference[field]}
+                      onChange={(event) => void updatePreference(preference.category, field, event.target.checked)}
+                    />
+                    {field === 'inApp' ? 'In-app' : field.toUpperCase()}
+                  </label>
+                ))}
+              </fieldset>
             );
           })}
         </details>

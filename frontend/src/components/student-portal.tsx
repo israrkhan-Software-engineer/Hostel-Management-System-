@@ -61,7 +61,7 @@ type Complaint = {
   createdAt: string;
 };
 type Notice = { id: string; title: string; body: string; startsAt: string | null; endsAt: string | null };
-type StudentTab = 'dashboard' | 'profile' | 'room' | 'fees' | 'complaints' | 'notifications' | 'services';
+type StudentTab = 'dashboard' | 'profile' | 'room' | 'fees' | 'complaints' | 'notifications' | 'services' | 'settings';
 
 const dayNames = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'];
 const meals = ['BREAKFAST', 'LUNCH', 'DINNER'] as const;
@@ -73,6 +73,7 @@ const studentTabs: Array<{ id: StudentTab; label: string; icon: string }> = [
   { id: 'complaints', label: 'Complaints', icon: 'alert' },
   { id: 'notifications', label: 'Notifications', icon: 'bell' },
   { id: 'services', label: 'Student services', icon: 'check' },
+  { id: 'settings', label: 'Settings', icon: 'shield' },
 ];
 
 function studentLoginPath() {
@@ -119,6 +120,7 @@ export default function StudentPortal() {
   const [notices, setNotices] = useState<Notice[]>([]);
   const [invoices, setInvoices] = useState<StudentInvoice[]>([]);
   const [activeTab, setActiveTab] = useState<StudentTab>('dashboard');
+  const [settingsTab, setSettingsTab] = useState<'security' | 'profile' | 'notifications' | 'display'>('security');
   const [title, setTitle] = useState('');
   const [description, setDescription] = useState('');
   const [editingProfile, setEditingProfile] = useState(false);
@@ -668,12 +670,6 @@ export default function StudentPortal() {
             </div>
             {branches.length === 1 && <span className="count-pill">{branches[0].name}</span>}
           </div>
-          {profile && (
-            <AccountSecurityPanel
-              mfaEnabled={profile.mfaEnabled}
-              onMfaEnabled={() => setProfile((current) => current ? { ...current, mfaEnabled: true } : current)}
-            />
-          )}
           {error && <p className="form-error" role="alert">{error}</p>}
           {message && <p className="success-message" role="status">{message}</p>}
           {branches.length === 0 && !loading && (
@@ -872,6 +868,229 @@ export default function StudentPortal() {
                     </div>
                   )}
                 </section>
+              )}
+
+              {activeTab === 'settings' && (
+                <div className="settings-section-container" style={{ gridColumn: '1 / -1' }}>
+                  <div className="dashboard-hero-row">
+                    <div className="dashboard-hero-title">
+                      <span className="eyebrow">CONFIGURATION</span>
+                      <h1>Settings</h1>
+                      <p>Manage your account security and preferences.</p>
+                    </div>
+                  </div>
+
+                  {/* Settings Navigation Tabs */}
+                  <div className="settings-tabs">
+                    <button
+                      type="button"
+                      className={`settings-tab${settingsTab === 'security' ? ' active' : ''}`}
+                      onClick={() => setSettingsTab('security')}
+                    >
+                      <Icon name="shield" size={16} />
+                      Account Security
+                    </button>
+                    <button
+                      type="button"
+                      className={`settings-tab${settingsTab === 'profile' ? ' active' : ''}`}
+                      onClick={() => setSettingsTab('profile')}
+                    >
+                      <Icon name="users" size={16} />
+                      Profile Info
+                    </button>
+                    <button
+                      type="button"
+                      className={`settings-tab${settingsTab === 'notifications' ? ' active' : ''}`}
+                      onClick={() => setSettingsTab('notifications')}
+                    >
+                      <Icon name="bell" size={16} />
+                      Notifications
+                    </button>
+                    <button
+                      type="button"
+                      className={`settings-tab${settingsTab === 'display' ? ' active' : ''}`}
+                      onClick={() => setSettingsTab('display')}
+                    >
+                      <Icon name="refresh" size={16} />
+                      Display
+                    </button>
+                  </div>
+
+                  {/* Security Tab */}
+                  {settingsTab === 'security' && profile && (
+                    <AccountSecurityPanel
+                      mfaEnabled={profile.mfaEnabled}
+                      onMfaEnabled={() => setProfile((current) => current ? { ...current, mfaEnabled: true } : current)}
+                    />
+                  )}
+
+                  {/* Profile Tab */}
+                  {settingsTab === 'profile' && (
+                    <div className="settings-panel-grid">
+                      <section className="panel security-card">
+                        <div className="panel-heading">
+                          <div>
+                            <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                              <Icon name="users" size={18} />
+                              <h2>Account Information</h2>
+                            </div>
+                            <p>Your student account details.</p>
+                          </div>
+                        </div>
+                        <div className="settings-info-list">
+                          <div className="settings-info-row">
+                            <span className="settings-info-label">Name</span>
+                            <span className="settings-info-value">{resident ? `${resident.firstName} ${resident.lastName}` : '—'}</span>
+                          </div>
+                          <div className="settings-info-row">
+                            <span className="settings-info-label">Email</span>
+                            <span className="settings-info-value">{profile?.email || '—'}</span>
+                          </div>
+                          <div className="settings-info-row">
+                            <span className="settings-info-label">Phone</span>
+                            <span className="settings-info-value">{resident?.phone || '—'}</span>
+                          </div>
+                          <div className="settings-info-row">
+                            <span className="settings-info-label">CNIC</span>
+                            <span className="settings-info-value">{resident?.cnicMasked || '—'}</span>
+                          </div>
+                          <div className="settings-info-row">
+                            <span className="settings-info-label">MFA Status</span>
+                            <span className={`status ${profile?.mfaEnabled ? 'active' : 'neutral'}`}>{profile?.mfaEnabled ? 'Enabled' : 'Disabled'}</span>
+                          </div>
+                          <div className="settings-info-row">
+                            <span className="settings-info-label">Branch</span>
+                            <span className="settings-info-value">{currentBranch?.name || 'No branch'}</span>
+                          </div>
+                        </div>
+                      </section>
+
+                      <section className="panel security-card">
+                        <div className="panel-heading">
+                          <div>
+                            <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                              <Icon name="bed" size={18} />
+                              <h2>Room Assignment</h2>
+                            </div>
+                            <p>Your current room and bed allocation.</p>
+                          </div>
+                        </div>
+                        <div className="settings-info-list">
+                          <div className="settings-info-row">
+                            <span className="settings-info-label">Building</span>
+                            <span className="settings-info-value">{resident?.room?.building || '—'}</span>
+                          </div>
+                          <div className="settings-info-row">
+                            <span className="settings-info-label">Floor</span>
+                            <span className="settings-info-value">{resident?.room?.floor || '—'}</span>
+                          </div>
+                          <div className="settings-info-row">
+                            <span className="settings-info-label">Room</span>
+                            <span className="settings-info-value">{resident?.room?.room || '—'}</span>
+                          </div>
+                          <div className="settings-info-row">
+                            <span className="settings-info-label">Bed</span>
+                            <span className="settings-info-value">{resident?.room?.bed || '—'}</span>
+                          </div>
+                        </div>
+                      </section>
+                    </div>
+                  )}
+
+                  {/* Notifications Tab */}
+                  {settingsTab === 'notifications' && (
+                    <div className="settings-panel-grid">
+                      <section className="panel security-card">
+                        <div className="panel-heading">
+                          <div>
+                            <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                              <Icon name="bell" size={18} />
+                              <h2>Notification Preferences</h2>
+                            </div>
+                            <p>Configure how and when you receive notifications.</p>
+                          </div>
+                        </div>
+                        <div className="settings-info-list">
+                          <div className="settings-toggle-row">
+                            <div>
+                              <strong>Fee Reminders</strong>
+                              <p className="muted">Get notified about upcoming fee deadlines.</p>
+                            </div>
+                            <span className="status active">Active</span>
+                          </div>
+                          <div className="settings-toggle-row">
+                            <div>
+                              <strong>Complaint Updates</strong>
+                              <p className="muted">Get notified when your complaints are resolved.</p>
+                            </div>
+                            <span className="status active">Active</span>
+                          </div>
+                          <div className="settings-toggle-row">
+                            <div>
+                              <strong>Hostel Announcements</strong>
+                              <p className="muted">Receive hostel-wide notices and announcements.</p>
+                            </div>
+                            <span className="status active">Active</span>
+                          </div>
+                          <div className="settings-toggle-row">
+                            <div>
+                              <strong>Mess Menu Updates</strong>
+                              <p className="muted">Get notified when the weekly mess menu changes.</p>
+                            </div>
+                            <span className="status active">Active</span>
+                          </div>
+                        </div>
+                      </section>
+                    </div>
+                  )}
+
+                  {/* Display Tab */}
+                  {settingsTab === 'display' && (
+                    <div className="settings-panel-grid">
+                      <section className="panel security-card">
+                        <div className="panel-heading">
+                          <div>
+                            <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                              <Icon name="refresh" size={18} />
+                              <h2>Display Settings</h2>
+                            </div>
+                            <p>Customize your portal appearance.</p>
+                          </div>
+                        </div>
+                        <div className="settings-info-list">
+                          <div className="settings-toggle-row">
+                            <div>
+                              <strong>Theme</strong>
+                              <p className="muted">Switch between light and dark mode.</p>
+                            </div>
+                            <ThemeToggle />
+                          </div>
+                          <div className="settings-toggle-row">
+                            <div>
+                              <strong>Default Branch</strong>
+                              <p className="muted">Select which branch loads by default.</p>
+                            </div>
+                            {branches.length > 0 && (
+                              <select
+                                className="field-inline"
+                                style={{ width: 'auto', minWidth: '160px', padding: '6px 10px', fontSize: '13px' }}
+                                value={branchId}
+                                onChange={(event) => {
+                                  setBranchId(event.target.value);
+                                  sessionStorage.setItem('hms-branch', event.target.value);
+                                }}
+                              >
+                                {branches.map((b) => (
+                                  <option key={b.id} value={b.id}>{b.name} ({b.code})</option>
+                                ))}
+                              </select>
+                            )}
+                          </div>
+                        </div>
+                      </section>
+                    </div>
+                  )}
+                </div>
               )}
             </div>
           )}

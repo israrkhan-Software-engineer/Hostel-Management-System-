@@ -51,6 +51,15 @@ export class VisitorsService {
     this.encryptionKey = config.getOrThrow<string>('app.fieldEncryptionKey');
   }
 
+  async listHosts(tenantId: string, branchId: string) {
+    await this.ensureBranch(tenantId, branchId);
+    return this.prisma.resident.findMany({
+      where: { tenantId, branchId, status: 'ACTIVE', deletedAt: null },
+      select: { id: true, firstName: true, lastName: true },
+      orderBy: [{ firstName: 'asc' }, { lastName: 'asc' }],
+    });
+  }
+
   async listVisitorVisits(tenantId: string, branchId: string, search?: string) {
     await this.ensureBranch(tenantId, branchId);
     const query = search?.trim();
@@ -90,9 +99,44 @@ export class VisitorsService {
     dto: CreateVisitorVisitDto,
   ) {
     await this.ensureBranch(tenantId, branchId);
+    let hostId = dto.hostResidentId;
+    if (!hostId && dto.manualHostName?.trim()) {
+      const parts = dto.manualHostName.trim().split(/\s+/);
+      const firstName = parts[0] || 'Host';
+      const lastName = parts.slice(1).join(' ') || '(Staff / Guest)';
+      let manualHost = await this.prisma.resident.findFirst({
+        where: {
+          tenantId,
+          branchId,
+          firstName,
+          lastName,
+          status: 'ACTIVE',
+          deletedAt: null,
+        },
+        select: { id: true },
+      });
+      if (!manualHost) {
+        manualHost = await this.prisma.resident.create({
+          data: {
+            tenantId,
+            branchId,
+            firstName,
+            lastName,
+            status: 'ACTIVE',
+          },
+          select: { id: true },
+        });
+      }
+      hostId = manualHost.id;
+    }
+
+    if (!hostId) {
+      throw new BadRequestException('Either select an active host resident or enter a host name');
+    }
+
     const host = await this.prisma.resident.findFirst({
       where: {
-        id: dto.hostResidentId,
+        id: hostId,
         tenantId,
         branchId,
         status: 'ACTIVE',

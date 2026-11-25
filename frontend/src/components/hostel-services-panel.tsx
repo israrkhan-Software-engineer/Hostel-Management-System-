@@ -1,6 +1,7 @@
 'use client';
 
 import { FormEvent, useCallback, useEffect, useMemo, useState } from 'react';
+import Icon from './ui/icon';
 import { apiDownload, apiRequest, apiUpload } from '@/lib/api/client';
 
 type ServicePermission = string;
@@ -45,17 +46,6 @@ type GatePass = {
   rejectionReason: string | null;
   resident?: Resident;
 };
-type MealAttendanceRecord = {
-  id: string;
-  mealDate: string;
-  meal: 'BREAKFAST' | 'LUNCH' | 'DINNER';
-  status: 'PRESENT' | 'ABSENT';
-  resident?: Resident;
-};
-type MealAttendanceResult = {
-  records: MealAttendanceRecord[];
-  summary: Record<string, { present: number; absent: number }>;
-};
 type MealPlan = {
   id: string;
   name: string;
@@ -94,7 +84,6 @@ type ServiceTab =
   | 'attendance'
   | 'leave'
   | 'gate-passes'
-  | 'meal-attendance'
   | 'subscriptions'
   | 'documents'
   | 'transfers'
@@ -118,7 +107,6 @@ function serviceTitle(tab: ServiceTab) {
     attendance: 'Attendance',
     leave: 'Leave requests',
     'gate-passes': 'Student gate passes',
-    'meal-attendance': 'Meal attendance',
     subscriptions: 'Meal subscriptions',
     documents: 'Student documents',
     transfers: 'Room transfers',
@@ -149,7 +137,6 @@ export default function HostelServicesPanel({
       ...(has('attendance', 'view') ? ['attendance' as const] : []),
       ...(has('leave_requests', 'view') || has('leave_requests', 'create') ? ['leave' as const] : []),
       ...(has('gate_passes', 'view') || has('gate_passes', 'create') ? ['gate-passes' as const] : []),
-      ...(has('meal_attendance', 'view') ? ['meal-attendance' as const] : []),
       ...(has('meal_subscriptions', 'view') ? ['subscriptions' as const] : []),
       ...(has('student_documents', 'view') || has('student_documents', 'create') ? ['documents' as const] : []),
       ...(mode === 'staff' && has('allocations', 'view') ? ['transfers' as const] : []),
@@ -163,7 +150,6 @@ export default function HostelServicesPanel({
   const [attendance, setAttendance] = useState<AttendanceResult | null>(null);
   const [leaveRequests, setLeaveRequests] = useState<LeaveRequest[]>([]);
   const [gatePasses, setGatePasses] = useState<GatePass[]>([]);
-  const [mealAttendance, setMealAttendance] = useState<MealAttendanceResult | null>(null);
   const [plans, setPlans] = useState<MealPlan[]>([]);
   const [subscriptions, setSubscriptions] = useState<MealSubscription[]>([]);
   const [documents, setDocuments] = useState<StudentDocument[]>([]);
@@ -175,10 +161,8 @@ export default function HostelServicesPanel({
     return { from: localDate(from), to: localDate() };
   });
   const [range, setRange] = useState({ from: localDate(), to: localDate() });
-  const [meal, setMeal] = useState<(typeof mealTypes)[number]>('BREAKFAST');
   const [selectedResidentId, setSelectedResidentId] = useState('');
   const [attendanceValues, setAttendanceValues] = useState<Record<string, string>>({});
-  const [mealValues, setMealValues] = useState<Record<string, string>>({});
   const [leaveForm, setLeaveForm] = useState({ startDate: '', endDate: '', reason: '' });
   const [gatePassForm, setGatePassForm] = useState({ exitAt: '', expectedReturnAt: '', reason: '' });
   const [planForm, setPlanForm] = useState({
@@ -201,6 +185,19 @@ export default function HostelServicesPanel({
   const [error, setError] = useState('');
   const [message, setMessage] = useState('');
 
+  // Auto-dismiss messages after 6s and errors after 8s
+  useEffect(() => {
+    if (!message) return;
+    const timer = setTimeout(() => setMessage(''), 6000);
+    return () => clearTimeout(timer);
+  }, [message]);
+
+  useEffect(() => {
+    if (!error) return;
+    const timer = setTimeout(() => setError(''), 8000);
+    return () => clearTimeout(timer);
+  }, [error]);
+
   useEffect(() => {
     if (!tabs.length) return;
     if (!tabs.includes(tab)) setTab(tabs[0]);
@@ -221,7 +218,6 @@ export default function HostelServicesPanel({
       try {
         const needsResidentList = mode === 'staff' && (
           (tab === 'attendance' && permissionSet.has('attendance:create'))
-          || (tab === 'meal-attendance' && permissionSet.has('meal_attendance:create'))
           || (tab === 'subscriptions' && permissionSet.has('meal_subscriptions:create'))
           || tab === 'documents'
           || tab === 'transfers'
@@ -248,17 +244,7 @@ export default function HostelServicesPanel({
         } else if (tab === 'gate-passes') {
           const path = mode === 'student' ? 'resident/gate-passes' : 'gate-passes';
           const rows = await get<GatePass[]>(`${base}/${path}`);
-          if (active) setGatePasses(rows);
-        } else if (tab === 'meal-attendance') {
-          const query = mode === 'student'
-            ? new URLSearchParams(attendanceRange)
-            : new URLSearchParams({ date, meal });
-          const path = mode === 'student' ? 'resident/meal-attendance' : 'meal-attendance';
-          const result = await get<MealAttendanceResult>(`${base}/${path}?${query}`);
-          if (!active) return;
-          setMealAttendance(result);
-          setMealValues(Object.fromEntries(result.records.map((record) => [record.resident?.id ?? '', record.status])));
-        } else if (tab === 'subscriptions') {
+          if (active) setGatePasses(rows);} else if (tab === 'subscriptions') {
           const path = mode === 'student' ? 'resident/meal-subscriptions' : 'meal-subscriptions';
           const [allPlans, allSubscriptions] = await Promise.all([
             get<MealPlan[]>(`${base}/meal-subscription-plans`),
@@ -300,7 +286,7 @@ export default function HostelServicesPanel({
     };
     void load();
     return () => { active = false; };
-  }, [attendanceRange, branchId, date, meal, mode, permissionSet, revision, selectedResidentId, subscriptionForm.planId, tab, tabs]);
+  }, [attendanceRange, branchId, date, mode, permissionSet, revision, selectedResidentId, subscriptionForm.planId, tab, tabs]);
 
   async function send<T>(path: string, method: 'POST' | 'PATCH' | 'DELETE', body?: unknown, success?: string) {
     setBusy(true);
@@ -371,19 +357,6 @@ export default function HostelServicesPanel({
 
   async function recordReturn(pass: GatePass) {
     await send(`/branches/${branchId}/gate-passes/${pass.id}/return`, 'POST', undefined, 'Student return recorded.');
-  }
-
-  async function submitMealAttendance(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-    if (!residents.length) return;
-    await send(`/branches/${branchId}/meal-attendance`, 'POST', {
-      date,
-      meal,
-      records: residents.map((resident) => ({
-        residentId: resident.id,
-        status: mealValues[resident.id] || 'ABSENT',
-      })),
-    }, `${meal.toLowerCase()} attendance saved.`);
   }
 
   async function submitMealPlan(event: FormEvent<HTMLFormElement>) {
@@ -515,8 +488,24 @@ export default function HostelServicesPanel({
           </button>
         ))}
       </nav>
-      {error && <div className="notice error" role="alert">{error}</div>}
-      {message && <div className="notice success" role="status">{message}</div>}
+      {error && (
+        <div className="notice error" role="alert">
+          <Icon name="alert" size={18} />
+          <span style={{ flex: 1 }}>{error}</span>
+          <button type="button" className="notice-close" onClick={() => setError('')} aria-label="Dismiss error">
+            <Icon name="close" size={14} />
+          </button>
+        </div>
+      )}
+      {message && (
+        <div className="notice success" role="status">
+          <Icon name="checkCircle" size={18} />
+          <span style={{ flex: 1 }}>{message}</span>
+          <button type="button" className="notice-close" onClick={() => setMessage('')} aria-label="Dismiss message">
+            <Icon name="close" size={14} />
+          </button>
+        </div>
+      )}
       {loading && <p className="muted" aria-live="polite">Loading {serviceTitle(tab).toLowerCase()}…</p>}
       {mode === 'staff' && ['documents', 'transfers', 'subscriptions'].includes(tab) && (
         <label className="service-filter">Resident
@@ -643,53 +632,6 @@ export default function HostelServicesPanel({
               </article>
             ))}
           </div>
-        </div>
-      )}
-
-      {tab === 'meal-attendance' && (
-        <div className="service-content">
-          <div className="service-filters">
-            {mode === 'staff' ? (
-              <>
-                <label>Date<input type="date" value={date} onChange={(event) => setDate(event.target.value)} /></label>
-                <label>Meal<select value={meal} onChange={(event) => setMeal(event.target.value as (typeof mealTypes)[number])}>{mealTypes.map((mealType) => <option key={mealType}>{mealType}</option>)}</select></label>
-              </>
-            ) : (
-              <>
-                <label>From<input type="date" value={attendanceRange.from} onChange={(event) => setAttendanceRange({ ...attendanceRange, from: event.target.value })} /></label>
-                <label>To<input type="date" value={attendanceRange.to} onChange={(event) => setAttendanceRange({ ...attendanceRange, to: event.target.value })} /></label>
-              </>
-            )}
-            {mode === 'staff' && mealAttendance && (
-              <div className="service-summary">{mealTypes.map((mealType) => <span key={mealType}>{mealType.toLowerCase()}: <strong>{mealAttendance.summary[mealType]?.present ?? 0} present / {mealAttendance.summary[mealType]?.absent ?? 0} absent</strong></span>)}</div>
-            )}
-          </div>
-          {mode === 'staff' && has('meal_attendance', 'create') ? (
-            <form className="stack-form" onSubmit={(event) => void submitMealAttendance(event)}>
-              {!residents.length ? <p className="empty-state">No active residents in this branch.</p> : (
-                <div className="service-record-list">
-                  {residents.map((resident) => (
-                    <label className="service-record" key={resident.id}>
-                      <span>{resident.firstName} {resident.lastName}</span>
-                      <select value={mealValues[resident.id] ?? 'ABSENT'} onChange={(event) => setMealValues((current) => ({ ...current, [resident.id]: event.target.value }))}>
-                        <option value="PRESENT">Present</option><option value="ABSENT">Absent</option>
-                      </select>
-                    </label>
-                  ))}
-                </div>
-              )}
-              {residents.length > 0 && <button className="button primary" disabled={busy}>Save {meal.toLowerCase()} attendance</button>}
-            </form>
-          ) : (
-            <div className="record-list">
-              {!mealAttendance?.records.length ? <p className="empty-state">No meal records for this date.</p> : mealAttendance.records.map((record) => (
-                <article className="record" key={record.id}>
-                  <h3>{record.meal} · {dateLabel(record.mealDate)}</h3>
-                  <p><span className={`status ${record.status.toLowerCase()}`}>{record.status}</span></p>
-                </article>
-              ))}
-            </div>
-          )}
         </div>
       )}
 

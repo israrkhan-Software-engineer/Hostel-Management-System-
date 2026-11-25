@@ -165,7 +165,7 @@ type VisitorVisit = {
   checkedOutAt: string | null;
   createdAt: string;
 };
-type Section = 'dashboard' | 'admissions' | 'residents' | 'inventory' | 'finance' | 'mess' | 'complaints' | 'notices' | 'visitors' | 'services' | 'people' | 'offline';
+type Section = 'dashboard' | 'admissions' | 'residents' | 'inventory' | 'finance' | 'mess' | 'complaints' | 'notices' | 'visitors' | 'services' | 'people' | 'offline' | 'settings';
 
 const emptyResident = { firstName: '', lastName: '', phone: '', email: '', dateOfBirth: '', cnic: '' };
 const emptyInvoiceLine = { description: '', quantity: '1', amount: '' };
@@ -209,6 +209,7 @@ export default function Phase2Workspace() {
   const [branchId, setBranchId] = useState('');
   const [branchForm, setBranchForm] = useState({ name: '', code: '' });
   const [section, setSection] = useState<Section>('dashboard');
+  const [settingsTab, setSettingsTab] = useState<'security' | 'profile' | 'notifications' | 'display'>('security');
   const [menuWeek, setMenuWeek] = useState(dateInput(mondayOf(today)));
   const [menuEntries, setMenuEntries] = useState<Record<string, string>>({});
   const [complaints, setComplaints] = useState<Complaint[]>([]);
@@ -243,6 +244,27 @@ export default function Phase2Workspace() {
   const [noticeForm, setNoticeForm] = useState({ title: '', body: '', startsAt: '', endsAt: '' });
   const [visitorVisitForm, setVisitorVisitForm] = useState(emptyVisitorVisit);
   const [visitorSearch, setVisitorSearch] = useState('');
+  const [editingNoticeId, setEditingNoticeId] = useState<string | null>(null);
+  const [activePaymentProofInvoiceId, setActivePaymentProofInvoiceId] = useState<string | null>(null);
+  const [activeRefundInvoiceId, setActiveRefundInvoiceId] = useState<string | null>(null);
+  const [visitorHostMode, setVisitorHostMode] = useState<'resident' | 'manual'>('resident');
+  const [visitorManualHost, setVisitorManualHost] = useState('');
+  const [visitorHosts, setVisitorHosts] = useState<{ id: string; firstName: string; lastName: string }[]>([]);
+  const [editingAdmission, setEditingAdmission] = useState<Admission | null>(null);
+  const [editAdmissionNotes, setEditAdmissionNotes] = useState('');
+  const [rejectingAdmission, setRejectingAdmission] = useState<Admission | null>(null);
+  const [rejectionReasonText, setRejectionReasonText] = useState('');
+  const [rejectingPayment, setRejectingPayment] = useState<FinancePayment | null>(null);
+  const [paymentRejectionReason, setPaymentRejectionReason] = useState('');
+  const [editingBuilding, setEditingBuilding] = useState<Building | null>(null);
+  const [editBuildingName, setEditBuildingName] = useState('');
+  const [editingFloor, setEditingFloor] = useState<Floor | null>(null);
+  const [editFloorName, setEditFloorName] = useState('');
+  const [editingRoom, setEditingRoom] = useState<Room | null>(null);
+  const [editRoomCode, setEditRoomCode] = useState('');
+  const [editRoomCapacity, setEditRoomCapacity] = useState('1');
+  const [editingBed, setEditingBed] = useState<(typeof inventoryBeds)[number] | null>(null);
+  const [editBedCode, setEditBedCode] = useState('');
   const [inventoryForm, setInventoryForm] = useState({
     buildingName: '', buildingId: '', floorLevel: '0', floorName: '',
     floorId: '', roomCode: '', bedCapacity: '1', roomId: '', bedCode: '',
@@ -252,6 +274,24 @@ export default function Phase2Workspace() {
   const isOnline = useOnlineStatus();
   const [message, setMessage] = useState('');
   const [error, setError] = useState('');
+
+  // Auto-dismiss feedback message after 6 seconds (5-10s requirement)
+  useEffect(() => {
+    if (!message) return;
+    const timer = setTimeout(() => {
+      setMessage('');
+    }, 6000);
+    return () => clearTimeout(timer);
+  }, [message]);
+
+  // Auto-dismiss errors after 8 seconds
+  useEffect(() => {
+    if (!error) return;
+    const timer = setTimeout(() => {
+      setError('');
+    }, 8000);
+    return () => clearTimeout(timer);
+  }, [error]);
   const financeSubmissionKeys = useRef(new Map<string, { signature: string; key: string }>());
   const financeSubmissionLocks = useRef(new Set<string>());
 
@@ -270,13 +310,14 @@ export default function Phase2Workspace() {
     ...(permissions.has('notices:view') ? ['notices' as const] : []),
     ...(permissions.has('visitors:view') || permissions.has('visitors:create') ? ['visitors' as const] : []),
     ...(permissions.has('users:view') && permissions.has('roles:view') ? ['people' as const] : []),
+    ...(profile ? ['settings' as const] : []),
     ...([
       'attendance:view', 'leave_requests:view', 'leave_requests:create', 'gate_passes:view',
       'gate_passes:create', 'meal_attendance:view', 'meal_subscriptions:view',
       'student_documents:view', 'student_documents:create', 'allocations:view', 'exports:export',
     ].some((permission) => permissions.has(permission)) ? ['services' as const] : []),
     'offline' as const,
-  ], [permissions]);
+  ], [permissions, profile]);
   const visibleSections = useMemo<Section[]>(
     () => (isOnline ? availableSections : ['offline']),
     [availableSections, isOnline],
@@ -482,6 +523,13 @@ export default function Phase2Workspace() {
     }
     if (can('visitors', 'view')) {
       tasks.push(load<VisitorVisit[]>(`/branches/${selectedBranchId}/visitors`, setVisitorVisits));
+    }
+    if (can('visitors', 'create') || can('visitors', 'view')) {
+      tasks.push(
+        apiRequest<{ id: string; firstName: string; lastName: string }[]>(`/branches/${selectedBranchId}/visitor-hosts`)
+          .then((res) => { if (res.ok) setVisitorHosts(res.data); })
+          .catch(() => {})
+      );
     }
     const results = await Promise.allSettled(tasks);
     const rejected = results.find((result): result is PromiseRejectedResult => result.status === 'rejected');
@@ -854,23 +902,40 @@ export default function Phase2Workspace() {
   }
 
   async function reviewAdmission(admission: Admission, decision: 'APPROVED' | 'REJECTED') {
-    const rejectionReason = decision === 'REJECTED'
-      ? window.prompt('Reason for rejecting this admission?')?.trim()
-      : undefined;
-    if (decision === 'REJECTED' && !rejectionReason) return;
+    if (decision === 'REJECTED') {
+      setRejectingAdmission(admission);
+      setRejectionReasonText('');
+      return;
+    }
     await mutate<Admission>(`/branches/${branchId}/admissions/${admission.id}/decision`, {
       method: 'PATCH',
-      body: JSON.stringify({ decision, ...(rejectionReason ? { rejectionReason } : {}) }),
-    }, decision === 'APPROVED' ? 'Admission approved.' : 'Admission rejected.');
+      body: JSON.stringify({ decision }),
+    }, 'Admission approved.');
   }
 
-  async function editAdmission(admission: Admission) {
-    const notes = window.prompt('Edit admission notes. Leave blank to clear them.', admission.notes ?? '');
-    if (notes === null) return;
-    await mutate<Admission>(`/branches/${branchId}/admissions/${admission.id}`, {
+  async function submitAdmissionRejection() {
+    if (!rejectingAdmission || !rejectionReasonText.trim()) return;
+    await mutate<Admission>(`/branches/${branchId}/admissions/${rejectingAdmission.id}/decision`, {
       method: 'PATCH',
-      body: JSON.stringify({ notes }),
+      body: JSON.stringify({ decision: 'REJECTED', rejectionReason: rejectionReasonText.trim() }),
+    }, 'Admission rejected.');
+    setRejectingAdmission(null);
+    setRejectionReasonText('');
+  }
+
+  function startEditAdmission(admission: Admission) {
+    setEditingAdmission(admission);
+    setEditAdmissionNotes(admission.notes ?? '');
+  }
+
+  async function saveAdmissionEdit() {
+    if (!editingAdmission) return;
+    await mutate<Admission>(`/branches/${branchId}/admissions/${editingAdmission.id}`, {
+      method: 'PATCH',
+      body: JSON.stringify({ notes: editAdmissionNotes }),
     }, 'Admission updated.');
+    setEditingAdmission(null);
+    setEditAdmissionNotes('');
   }
 
   async function cancelAdmission(admission: Admission) {
@@ -925,13 +990,18 @@ export default function Phase2Workspace() {
     }
   }
 
-  async function editBuilding(building: Building) {
-    const name = window.prompt('Building name', building.name);
-    if (name === null) return;
-    await mutate(`/branches/${branchId}/inventory/buildings/${building.id}`, {
+  function startEditBuilding(building: Building) {
+    setEditingBuilding(building);
+    setEditBuildingName(building.name);
+  }
+
+  async function saveBuildingEdit() {
+    if (!editingBuilding || !editBuildingName.trim()) return;
+    await mutate(`/branches/${branchId}/inventory/buildings/${editingBuilding.id}`, {
       method: 'PATCH',
-      body: JSON.stringify({ name }),
+      body: JSON.stringify({ name: editBuildingName.trim() }),
     }, 'Building updated.');
+    setEditingBuilding(null);
   }
 
   async function archiveBuilding(building: Building) {
@@ -941,13 +1011,18 @@ export default function Phase2Workspace() {
     }, 'Building archived.');
   }
 
-  async function editFloor(floor: Floor) {
-    const name = window.prompt('Floor name; leave blank to remove the name.', floor.name ?? '');
-    if (name === null) return;
-    await mutate(`/branches/${branchId}/inventory/floors/${floor.id}`, {
+  function startEditFloor(floor: Floor) {
+    setEditingFloor(floor);
+    setEditFloorName(floor.name ?? '');
+  }
+
+  async function saveFloorEdit() {
+    if (!editingFloor) return;
+    await mutate(`/branches/${branchId}/inventory/floors/${editingFloor.id}`, {
       method: 'PATCH',
-      body: JSON.stringify({ name }),
+      body: JSON.stringify({ name: editFloorName.trim() || undefined }),
     }, 'Floor updated.');
+    setEditingFloor(null);
   }
 
   async function archiveFloor(floor: Floor) {
@@ -957,20 +1032,24 @@ export default function Phase2Workspace() {
     }, 'Floor archived.');
   }
 
-  async function editRoom(room: Room) {
-    const code = window.prompt('Room code', room.code);
-    if (code === null) return;
-    const capacity = window.prompt('Bed capacity (1–10)', String(room.bedCapacity));
-    if (capacity === null) return;
-    const bedCapacity = Number(capacity);
+  function startEditRoom(room: Room) {
+    setEditingRoom(room);
+    setEditRoomCode(room.code);
+    setEditRoomCapacity(String(room.bedCapacity));
+  }
+
+  async function saveRoomEdit() {
+    if (!editingRoom) return;
+    const bedCapacity = Number(editRoomCapacity);
     if (!Number.isInteger(bedCapacity) || bedCapacity < 1 || bedCapacity > 10) {
       setError('Bed capacity must be a whole number from 1 to 10.');
       return;
     }
-    await mutate(`/branches/${branchId}/inventory/rooms/${room.id}`, {
+    await mutate(`/branches/${branchId}/inventory/rooms/${editingRoom.id}`, {
       method: 'PATCH',
-      body: JSON.stringify({ code, bedCapacity }),
+      body: JSON.stringify({ code: editRoomCode.trim(), bedCapacity }),
     }, 'Room updated.');
+    setEditingRoom(null);
   }
 
   async function archiveRoom(room: Room) {
@@ -980,13 +1059,18 @@ export default function Phase2Workspace() {
     }, 'Room archived.');
   }
 
-  async function editBed(bed: (typeof inventoryBeds)[number]) {
-    const code = window.prompt('Bed code', bed.code);
-    if (code === null) return;
-    await mutate(`/branches/${branchId}/inventory/beds/${bed.id}`, {
+  function startEditBed(bed: (typeof inventoryBeds)[number]) {
+    setEditingBed(bed);
+    setEditBedCode(bed.code);
+  }
+
+  async function saveBedEdit() {
+    if (!editingBed || !editBedCode.trim()) return;
+    await mutate(`/branches/${branchId}/inventory/beds/${editingBed.id}`, {
       method: 'PATCH',
-      body: JSON.stringify({ code }),
+      body: JSON.stringify({ code: editBedCode.trim() }),
     }, 'Bed updated.');
+    setEditingBed(null);
   }
 
   async function archiveBed(bed: (typeof inventoryBeds)[number]) {
@@ -1083,14 +1167,20 @@ export default function Phase2Workspace() {
 
   async function createVisitorVisit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
+    const payload = {
+      ...visitorVisitForm,
+      ...(visitorVisitForm.visitorPhone ? {} : { visitorPhone: undefined }),
+      ...(visitorHostMode === 'manual' && visitorManualHost.trim()
+        ? { hostResidentId: undefined, manualHostName: visitorManualHost.trim() }
+        : {}),
+    };
     if (await mutate<VisitorVisit>(`/branches/${branchId}/visitors`, {
       method: 'POST',
-      body: JSON.stringify({
-        ...visitorVisitForm,
-        ...(visitorVisitForm.visitorPhone ? {} : { visitorPhone: undefined }),
-      }),
+      body: JSON.stringify(payload),
     }, 'Visitor registered and awaiting staff approval.')) {
       setVisitorVisitForm(emptyVisitorVisit);
+      setVisitorManualHost('');
+      setVisitorHostMode('resident');
     }
   }
 
@@ -1306,6 +1396,21 @@ export default function Phase2Workspace() {
           </>
         )}
 
+        {/* SETTINGS Section */}
+        {canShow('settings') && (
+          <>
+            <div className="sidebar-section-heading">SETTINGS</div>
+            <button
+              type="button"
+              className={`sidebar-nav-btn${section === 'settings' ? ' active' : ''}`}
+              onClick={() => setSection('settings')}
+            >
+              <Icon name="shield" size={16} />
+              Settings
+            </button>
+          </>
+        )}
+
         {/* User Footer Pill */}
         <div className="sidebar-footer-card">
           <div className="sidebar-user-pill">
@@ -1375,22 +1480,49 @@ export default function Phase2Workspace() {
             </div>
           )}
 
-          <AccountSecurityPanel
-            mfaEnabled={profile.mfaEnabled}
-            onMfaEnabled={() => setProfile((current) => current ? { ...current, mfaEnabled: true } : current)}
-          />
-
           {!branches.length && !visibleSections.includes('people') ? (
             <section className="panel">
-              {error && <div className="notice error" role="alert">{error}</div>}
-              {message && <div className="notice success" role="status">{message}</div>}
+              {error && (
+                <div className="notice error" role="alert">
+                  <Icon name="alert" size={18} />
+                  <span style={{ flex: 1 }}>{error}</span>
+                  <button type="button" className="notice-close" onClick={() => setError('')} aria-label="Dismiss error">
+                    <Icon name="close" size={14} />
+                  </button>
+                </div>
+              )}
+              {message && (
+                <div className="notice success" role="status">
+                  <Icon name="checkCircle" size={18} />
+                  <span style={{ flex: 1 }}>{message}</span>
+                  <button type="button" className="notice-close" onClick={() => setMessage('')} aria-label="Dismiss message">
+                    <Icon name="close" size={14} />
+                  </button>
+                </div>
+              )}
               <h2>No branch access</h2>
               <p>Your account does not have an active branch assigned. Ask an administrator to grant branch access.</p>
             </section>
           ) : (
             <>
-              {error && <div className="notice error" role="alert">{error}</div>}
-              {message && <div className="notice success" role="status">{message}</div>}
+              {error && (
+                <div className="notice error" role="alert">
+                  <Icon name="alert" size={18} />
+                  <span style={{ flex: 1 }}>{error}</span>
+                  <button type="button" className="notice-close" onClick={() => setError('')} aria-label="Dismiss error">
+                    <Icon name="close" size={14} />
+                  </button>
+                </div>
+              )}
+              {message && (
+                <div className="notice success" role="status">
+                  <Icon name="checkCircle" size={18} />
+                  <span style={{ flex: 1 }}>{message}</span>
+                  <button type="button" className="notice-close" onClick={() => setMessage('')} aria-label="Dismiss message">
+                    <Icon name="close" size={14} />
+                  </button>
+                </div>
+              )}
               {loading && <p className="muted">Refreshing branch data…</p>}
 
               {/* DASHBOARD SECTION matching Screenshot 1 */}
@@ -1560,6 +1692,216 @@ export default function Phase2Workspace() {
 
             {section === 'people' && <TenantManagementPanel permissions={profile?.permissions ?? []} />}
 
+            {section === 'settings' && (
+              <div className="settings-section-container">
+                <div className="dashboard-hero-row">
+                  <div className="dashboard-hero-title">
+                    <span className="eyebrow">CONFIGURATION</span>
+                    <h1>Settings</h1>
+                    <p>Manage account security, preferences, and operational settings.</p>
+                  </div>
+                </div>
+
+                {/* Settings Navigation Tabs */}
+                <div className="settings-tabs">
+                  <button
+                    type="button"
+                    className={`settings-tab${settingsTab === 'security' ? ' active' : ''}`}
+                    onClick={() => setSettingsTab('security')}
+                  >
+                    <Icon name="shield" size={16} />
+                    Account Security
+                  </button>
+                  <button
+                    type="button"
+                    className={`settings-tab${settingsTab === 'profile' ? ' active' : ''}`}
+                    onClick={() => setSettingsTab('profile')}
+                  >
+                    <Icon name="users" size={16} />
+                    Profile
+                  </button>
+                  <button
+                    type="button"
+                    className={`settings-tab${settingsTab === 'notifications' ? ' active' : ''}`}
+                    onClick={() => setSettingsTab('notifications')}
+                  >
+                    <Icon name="bell" size={16} />
+                    Notifications
+                  </button>
+                  <button
+                    type="button"
+                    className={`settings-tab${settingsTab === 'display' ? ' active' : ''}`}
+                    onClick={() => setSettingsTab('display')}
+                  >
+                    <Icon name="refresh" size={16} />
+                    Display
+                  </button>
+                </div>
+
+                {/* Security Tab */}
+                {settingsTab === 'security' && (
+                  <AccountSecurityPanel
+                    mfaEnabled={profile.mfaEnabled}
+                    onMfaEnabled={() => setProfile((current) => current ? { ...current, mfaEnabled: true } : current)}
+                  />
+                )}
+
+                {/* Profile Tab */}
+                {settingsTab === 'profile' && (
+                  <div className="settings-panel-grid">
+                    <section className="panel security-card">
+                      <div className="panel-heading">
+                        <div>
+                          <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                            <Icon name="users" size={18} />
+                            <h2>Account Information</h2>
+                          </div>
+                          <p>Your account details and role assignments.</p>
+                        </div>
+                      </div>
+                      <div className="settings-info-list">
+                        <div className="settings-info-row">
+                          <span className="settings-info-label">Email</span>
+                          <span className="settings-info-value">{profile.email || '—'}</span>
+                        </div>
+                        <div className="settings-info-row">
+                          <span className="settings-info-label">Phone</span>
+                          <span className="settings-info-value">{profile.phone || '—'}</span>
+                        </div>
+                        <div className="settings-info-row">
+                          <span className="settings-info-label">Roles</span>
+                          <span className="settings-info-value">{profile.roles.join(', ') || '—'}</span>
+                        </div>
+                        <div className="settings-info-row">
+                          <span className="settings-info-label">MFA Status</span>
+                          <span className={`status ${profile.mfaEnabled ? 'active' : 'neutral'}`}>{profile.mfaEnabled ? 'Enabled' : 'Disabled'}</span>
+                        </div>
+                        <div className="settings-info-row">
+                          <span className="settings-info-label">Active Branch</span>
+                          <span className="settings-info-value">{currentBranch?.name || 'No branch'}</span>
+                        </div>
+                      </div>
+                    </section>
+
+                    <section className="panel security-card">
+                      <div className="panel-heading">
+                        <div>
+                          <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                            <Icon name="shield" size={18} />
+                            <h2>Permissions</h2>
+                          </div>
+                          <p>Your current access permissions in this branch.</p>
+                        </div>
+                      </div>
+                      <div className="settings-permissions-grid">
+                        {profile.permissions.length > 0 ? profile.permissions.map((perm) => (
+                          <span key={perm} className="settings-permission-badge">{perm.replace(/[.:]/g, ' ')}</span>
+                        )) : <p className="muted">No specific permissions assigned.</p>}
+                      </div>
+                    </section>
+                  </div>
+                )}
+
+                {/* Notifications Tab */}
+                {settingsTab === 'notifications' && (
+                  <div className="settings-panel-grid">
+                    <section className="panel security-card">
+                      <div className="panel-heading">
+                        <div>
+                          <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                            <Icon name="bell" size={18} />
+                            <h2>Notification Preferences</h2>
+                          </div>
+                          <p>Configure how and when you receive notifications.</p>
+                        </div>
+                      </div>
+                      <div className="settings-info-list">
+                        <div className="settings-toggle-row">
+                          <div>
+                            <strong>Admission Alerts</strong>
+                            <p className="muted">Get notified when new admission requests arrive.</p>
+                          </div>
+                          <span className="status active">Active</span>
+                        </div>
+                        <div className="settings-toggle-row">
+                          <div>
+                            <strong>Payment Updates</strong>
+                            <p className="muted">Get notified about payment submissions and verifications.</p>
+                          </div>
+                          <span className="status active">Active</span>
+                        </div>
+                        <div className="settings-toggle-row">
+                          <div>
+                            <strong>Complaint Notifications</strong>
+                            <p className="muted">Get notified when new complaints are submitted.</p>
+                          </div>
+                          <span className="status active">Active</span>
+                        </div>
+                        <div className="settings-toggle-row">
+                          <div>
+                            <strong>System Announcements</strong>
+                            <p className="muted">Receive system-wide announcements and notices.</p>
+                          </div>
+                          <span className="status active">Active</span>
+                        </div>
+                      </div>
+                    </section>
+                  </div>
+                )}
+
+                {/* Display Tab */}
+                {settingsTab === 'display' && (
+                  <div className="settings-panel-grid">
+                    <section className="panel security-card">
+                      <div className="panel-heading">
+                        <div>
+                          <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                            <Icon name="refresh" size={18} />
+                            <h2>Display Settings</h2>
+                          </div>
+                          <p>Customize your workspace appearance.</p>
+                        </div>
+                      </div>
+                      <div className="settings-info-list">
+                        <div className="settings-toggle-row">
+                          <div>
+                            <strong>Theme</strong>
+                            <p className="muted">Switch between light and dark mode.</p>
+                          </div>
+                          <ThemeToggle />
+                        </div>
+                        <div className="settings-toggle-row">
+                          <div>
+                            <strong>Default Branch</strong>
+                            <p className="muted">Select which branch loads by default.</p>
+                          </div>
+                          {branches.length > 0 && (
+                            <select
+                              className="field-inline"
+                              style={{ width: 'auto', minWidth: '160px', padding: '6px 10px', fontSize: '13px' }}
+                              value={branchId}
+                              onChange={(event) => setBranchId(event.target.value)}
+                            >
+                              {branches.map((b) => (
+                                <option key={b.id} value={b.id}>{b.name} ({b.code})</option>
+                              ))}
+                            </select>
+                          )}
+                        </div>
+                        <div className="settings-toggle-row">
+                          <div>
+                            <strong>Compact Mode</strong>
+                            <p className="muted">Reduce spacing and padding for denser information display.</p>
+                          </div>
+                          <span className="status neutral">Default</span>
+                        </div>
+                      </div>
+                    </section>
+                  </div>
+                )}
+              </div>
+            )}
+
             {section === 'admissions' && (
               <div>
                 <div className="dashboard-hero-row">
@@ -1614,7 +1956,7 @@ export default function Phase2Workspace() {
                             )}
                             {admission.status === 'PENDING' && can('admissions', 'edit') && (
                               <div className="record-actions">
-                                <button className="button secondary small" type="button" disabled={busy} onClick={() => void editAdmission(admission)}>Edit</button>
+                                <button className="button secondary small" type="button" disabled={busy} onClick={() => startEditAdmission(admission)}>Edit</button>
                                 <button className="button danger small" type="button" disabled={busy} onClick={() => void cancelAdmission(admission)}>Cancel admission</button>
                               </div>
                             )}
@@ -1652,51 +1994,141 @@ export default function Phase2Workspace() {
                 <div className="dashboard-hero-row">
                   <div className="dashboard-hero-title">
                     <span className="eyebrow">FRONT DESK</span>
-                    <h1>Residents</h1>
-                    <p>{residents.length} registered</p>
+                    <h1>Resident Directory</h1>
+                    <p>{residents.length} active registered resident{residents.length === 1 ? '' : 's'}</p>
                   </div>
+                  {can('residents', 'create') && !residentEditingId && (
+                    <div>
+                      <button
+                        type="button"
+                        className="button primary"
+                        onClick={() => {
+                          const formEl = document.getElementById('resident-registration-panel');
+                          formEl?.scrollIntoView({ behavior: 'smooth' });
+                        }}
+                      >
+                        <Icon name="plus" size={16} /> Register Resident
+                      </button>
+                    </div>
+                  )}
                 </div>
                 <div className="content-grid">
                 {(can('residents', 'create') || Boolean(residentEditingId)) && (
-                  <section className="panel">
-                    <h2>{residentEditingId ? 'Edit resident' : 'Register a resident'}</h2>
-                    <p>CNIC is encrypted at rest and returned only in masked form.</p>
+                  <section className="panel" id="resident-registration-panel">
+                    <div className="panel-heading">
+                      <div>
+                        <h2>{residentEditingId ? 'Edit Resident Details' : 'Register a New Resident'}</h2>
+                        <p>CNIC is encrypted at rest and returned only in masked format.</p>
+                      </div>
+                      <span style={{ fontSize: '24px', display: 'inline-flex', alignItems: 'center' }}><Icon name={residentEditingId ? 'edit' : 'user'} size={24} /></span>
+                    </div>
                     <form className="stack-form" onSubmit={createResident}>
                       <div className="two-fields">
-                        <label>First name<input required maxLength={100} value={residentForm.firstName} onChange={(event) => setResidentForm({ ...residentForm, firstName: event.target.value })} /></label>
-                        <label>Last name<input required maxLength={100} value={residentForm.lastName} onChange={(event) => setResidentForm({ ...residentForm, lastName: event.target.value })} /></label>
+                        <label>
+                          <span>First name</span>
+                          <input required maxLength={100} value={residentForm.firstName} placeholder="e.g. Bilal" onChange={(event) => setResidentForm({ ...residentForm, firstName: event.target.value })} />
+                        </label>
+                        <label>
+                          <span>Last name</span>
+                          <input required maxLength={100} value={residentForm.lastName} placeholder="e.g. Tariq" onChange={(event) => setResidentForm({ ...residentForm, lastName: event.target.value })} />
+                        </label>
                       </div>
-                      <label>Phone<input maxLength={30} value={residentForm.phone} onChange={(event) => setResidentForm({ ...residentForm, phone: event.target.value })} /></label>
-                      <label>Email<input type="email" maxLength={254} value={residentForm.email} onChange={(event) => setResidentForm({ ...residentForm, email: event.target.value })} /></label>
-                      <label>Date of birth<input type="date" value={residentForm.dateOfBirth} aria-invalid={Boolean(dateOfBirthError)} aria-describedby={dateOfBirthError ? 'resident-date-of-birth-error' : undefined} onChange={(event) => { const value = event.target.value; setResidentForm({ ...residentForm, dateOfBirth: value }); setDateOfBirthError(getDateOfBirthError(value)); }} onBlur={(event) => setDateOfBirthError(getDateOfBirthError(event.target.value))} /></label>
+                      <div className="two-fields">
+                        <label>
+                          <span>Phone number</span>
+                          <input maxLength={30} value={residentForm.phone} placeholder="+92 300 1234567" onChange={(event) => setResidentForm({ ...residentForm, phone: event.target.value })} />
+                        </label>
+                        <label>
+                          <span>Email address</span>
+                          <input type="email" maxLength={254} value={residentForm.email} placeholder="resident@email.com" onChange={(event) => setResidentForm({ ...residentForm, email: event.target.value })} />
+                        </label>
+                      </div>
+                      <div className="two-fields">
+                        <label>
+                          <span>Date of birth</span>
+                          <input type="date" value={residentForm.dateOfBirth} aria-invalid={Boolean(dateOfBirthError)} aria-describedby={dateOfBirthError ? 'resident-date-of-birth-error' : undefined} onChange={(event) => { const value = event.target.value; setResidentForm({ ...residentForm, dateOfBirth: value }); setDateOfBirthError(getDateOfBirthError(value)); }} onBlur={(event) => setDateOfBirthError(getDateOfBirthError(event.target.value))} />
+                        </label>
+                        {!residentEditingId && (
+                          <label>
+                            <span>CNIC Number</span>
+                            <input inputMode="numeric" placeholder="12345-1234567-1" value={residentForm.cnic} onChange={(event) => setResidentForm({ ...residentForm, cnic: event.target.value })} />
+                          </label>
+                        )}
+                      </div>
                       {dateOfBirthError && <p id="resident-date-of-birth-error" className="form-error" role="alert">{dateOfBirthError}</p>}
-                      {!residentEditingId && <label>CNIC<input inputMode="numeric" placeholder="12345-1234567-1" value={residentForm.cnic} onChange={(event) => setResidentForm({ ...residentForm, cnic: event.target.value })} /></label>}
-                      <div className="button-row">
-                        <button className="button primary" disabled={busy}>{residentEditingId ? 'Save changes' : 'Save resident'}</button>
-                        {residentEditingId && <button className="button secondary" type="button" disabled={busy} onClick={() => { setResidentEditingId(''); setResidentForm(emptyResident); }}>Cancel</button>}
+                      <div className="button-row" style={{ marginTop: '8px' }}>
+                        <button className="button primary" disabled={busy}>
+                          {residentEditingId ? <><Icon name="check" size={14} style={{ marginRight: '6px' }} /> Save Changes</> : <><Icon name="plus" size={14} style={{ marginRight: '6px' }} /> Register Resident</>}
+                        </button>
+                        {residentEditingId && (
+                          <button className="button secondary" type="button" disabled={busy} onClick={() => { setResidentEditingId(''); setResidentForm(emptyResident); }}>
+                            Cancel
+                          </button>
+                        )}
                       </div>
                     </form>
                   </section>
                 )}
                 <section className="panel grow">
-                  <div className="panel-heading"><div><h2>Residents</h2><p>Private identity details are never shown here.</p></div><span className="count-pill">{residents.length}</span></div>
-                  <form className="inline-form" onSubmit={searchResidents}>
-                    <label>Search by name, ID, CNIC, phone, or email<input value={residentSearch} onChange={(event) => setResidentSearch(event.target.value)} /></label>
+                  <div className="panel-heading">
+                    <div>
+                      <h2>Enrolled Residents</h2>
+                      <p>View residency status, identity tokens, and student account links.</p>
+                    </div>
+                    <span className="count-pill">{residents.length}</span>
+                  </div>
+                  <form className="inline-form" onSubmit={searchResidents} style={{ marginBottom: '16px' }}>
+                    <label style={{ flex: 1 }}>
+                      <input value={residentSearch} placeholder="Search by name, CNIC, phone, or email..." onChange={(event) => setResidentSearch(event.target.value)} />
+                    </label>
                     <button className="button secondary" type="submit">Search</button>
                   </form>
-                  {!residents.length ? <p className="empty-state">No residents found.</p> : (
-                    <div className="record-list">
-                      {residents.map((resident) => (
-                        <article className="record record-main" key={resident.id}>
-                          <div><h3>{resident.firstName} {resident.lastName}</h3><p>{resident.phone || resident.email || 'No contact details'}{resident.cnicMasked ? ` · CNIC ${resident.cnicMasked}` : ''}</p></div>
-                          <span className={`status ${resident.status.toLowerCase()}`}>{resident.status}</span>
-                          <div className="button-row">
-                            {can('residents', 'edit') && <button className="button secondary small" type="button" disabled={busy} onClick={() => editResident(resident)}>Edit</button>}
-                            {can('residents', 'edit') && resident.email && !resident.accountLinked && <button className="button secondary small" type="button" disabled={busy} onClick={() => void mutate(`/branches/${branchId}/residents/${resident.id}/link-account`, { method: 'POST' }, 'Student account linked using the matching email.')}>Link student account</button>}
-                            {can('residents', 'delete') && resident.status === 'ACTIVE' && <button className="button secondary small" type="button" disabled={busy} onClick={() => void deactivateResident(resident)}>Deactivate</button>}
-                          </div>
-                        </article>
-                      ))}
+                  {!residents.length ? <p className="empty-state">No residents found matching your criteria.</p> : (
+                    <div className="resident-cards-grid" style={{ display: 'grid', gap: '12px' }}>
+                      {residents.map((resident) => {
+                        const initials = `${resident.firstName?.[0] || 'R'}${resident.lastName?.[0] || ''}`;
+                        return (
+                          <article className="resident-item-card" key={resident.id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '16px 20px', background: 'var(--color-bg-elevated)', border: '1px solid var(--color-border)', borderRadius: 'var(--radius-lg)', flexWrap: 'wrap', gap: '14px' }}>
+                            <div style={{ display: 'flex', alignItems: 'center', gap: '14px' }}>
+                              <div style={{ width: '44px', height: '44px', borderRadius: '50%', background: 'color-mix(in srgb, var(--color-primary) 15%, var(--color-bg-elevated))', color: 'var(--color-primary)', display: 'grid', placeItems: 'center', fontWeight: 800, fontSize: '16px', flexShrink: 0 }}>
+                                {initials}
+                              </div>
+                              <div>
+                                <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                                  <h3 style={{ margin: 0, fontSize: '15px' }}>{resident.firstName} {resident.lastName}</h3>
+                                  <span className={`status ${resident.status.toLowerCase()}`}>{resident.status}</span>
+                                </div>
+                                <p style={{ margin: '3px 0 0', fontSize: '13px', color: 'var(--color-text-muted)' }}>
+                                  {resident.phone || resident.email || 'No contact details'}
+                                  {resident.cnicMasked ? ` · CNIC ${resident.cnicMasked}` : ''}
+                                </p>
+                                {resident.accountLinked && (
+                                  <span style={{ display: 'inline-flex', alignItems: 'center', gap: '4px', fontSize: '11px', fontWeight: 700, color: 'var(--color-success)', marginTop: '4px' }}>
+                                    <Icon name="checkCircle" size={13} /> Student Portal Linked
+                                  </span>
+                                )}
+                              </div>
+                            </div>
+                            <div className="button-row" style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
+                              {can('residents', 'edit') && (
+                                <button className="button primary small" type="button" disabled={busy} onClick={() => editResident(resident)}>
+                                  <><Icon name="edit" size={13} style={{ marginRight: '6px' }} /> Edit Details</>
+                                </button>
+                              )}
+                              {can('residents', 'edit') && resident.email && !resident.accountLinked && (
+                                <button className="button secondary small" type="button" disabled={busy} onClick={() => void mutate(`/branches/${branchId}/residents/${resident.id}/link-account`, { method: 'POST' }, 'Student account linked using the matching email.')}>
+                                  <><Icon name="link" size={13} style={{ marginRight: '6px' }} /> Link Account</>
+                                </button>
+                              )}
+                              {can('residents', 'delete') && resident.status === 'ACTIVE' && (
+                                <button className="button danger small" type="button" disabled={busy} onClick={() => void deactivateResident(resident)}>
+                                  Deactivate
+                                </button>
+                              )}
+                            </div>
+                          </article>
+                        );
+                      })}
                     </div>
                   )}
                 </section>
@@ -1740,34 +2172,87 @@ export default function Phase2Workspace() {
                 )}
                 {(can('inventory', 'edit') || can('inventory', 'delete')) && (
                   <section className="panel">
-                    <h3>Buildings, floors, and rooms</h3>
+                    <h3>Buildings, Floors, and Rooms Hierarchy</h3>
                     {!buildings.length ? <p className="empty-state">No buildings configured.</p> : (
                       <div className="record-list">
                         {buildings.map((building) => (
-                          <article className="record" key={building.id}>
-                            <div className="record-main">
-                              <div><h4>{building.name}</h4></div>
-                              <div className="record-actions">
-                                {can('inventory', 'edit') && <button className="button secondary small" type="button" disabled={busy} onClick={() => void editBuilding(building)}>Edit</button>}
-                                {can('inventory', 'delete') && <button className="button danger small" type="button" disabled={busy} onClick={() => void archiveBuilding(building)}>Archive</button>}
-                              </div>
-                            </div>
-                            {building.floors.map((floor) => (
-                              <div className="record" key={floor.id}>
-                                <div className="record-main">
-                                  <div><strong>{floor.name || `Level ${floor.level}`}</strong></div>
-                                  <div className="record-actions">
-                                    {can('inventory', 'edit') && <button className="button secondary small" type="button" disabled={busy} onClick={() => void editFloor(floor)}>Edit floor</button>}
-                                    {can('inventory', 'delete') && <button className="button danger small" type="button" disabled={busy} onClick={() => void archiveFloor(floor)}>Archive floor</button>}
-                                  </div>
+                          <article className="record" key={building.id} style={{ border: '1px solid var(--color-border)', borderRadius: 'var(--radius-lg)', padding: '16px' }}>
+                            {editingBuilding?.id === building.id ? (
+                              <div className="inline-edit-form" style={{ padding: '14px', background: 'var(--color-bg-subtle)', borderRadius: 'var(--radius-md)', border: '2px solid var(--color-primary)', marginBottom: '10px' }}>
+                                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '8px' }}>
+                                  <strong style={{ fontSize: '14px', color: 'var(--color-primary)' }}>Edit Building Name</strong>
+                                  <button className="button secondary small" type="button" onClick={() => setEditingBuilding(null)}><Icon name="close" size={13} /></button>
                                 </div>
-                                {rooms.filter((room) => room.floor.id === floor.id).map((room) => (
-                                  <div className="record-main" key={room.id}>
-                                    <span>Room {room.code} · capacity {room.bedCapacity}</span>
-                                    <div className="record-actions">
-                                      {can('inventory', 'edit') && <button className="button secondary small" type="button" disabled={busy} onClick={() => void editRoom(room)}>Edit room</button>}
-                                      {can('inventory', 'delete') && <button className="button danger small" type="button" disabled={busy} onClick={() => void archiveRoom(room)}>Archive room</button>}
+                                <div className="form-row">
+                                  <label>Building Name<input value={editBuildingName} onChange={(e) => setEditBuildingName(e.target.value)} required maxLength={100} /></label>
+                                </div>
+                                <div className="button-row" style={{ marginTop: '8px' }}>
+                                  <button className="button primary small" type="button" disabled={busy || !editBuildingName.trim()} onClick={() => void saveBuildingEdit()}>Save Building</button>
+                                  <button className="button secondary small" type="button" onClick={() => setEditingBuilding(null)}>Cancel</button>
+                                </div>
+                              </div>
+                            ) : (
+                              <div className="record-main">
+                                <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}><Icon name="building" size={18} /><h4 style={{ margin: 0, fontSize: '16px' }}>{building.name}</h4></div>
+                                <div className="record-actions">
+                                  {can('inventory', 'edit') && <button className="button secondary small" type="button" disabled={busy} onClick={() => startEditBuilding(building)}><Icon name="edit" size={13} style={{ marginRight: '6px' }} /> Edit</button>}
+                                  {can('inventory', 'delete') && <button className="button danger small" type="button" disabled={busy} onClick={() => void archiveBuilding(building)}>Archive</button>}
+                                </div>
+                              </div>
+                            )}
+
+                            {building.floors.map((floor) => (
+                              <div className="record" key={floor.id} style={{ marginTop: '10px', background: 'var(--color-bg-subtle)', borderRadius: 'var(--radius-md)', padding: '12px' }}>
+                                {editingFloor?.id === floor.id ? (
+                                  <div className="inline-edit-form" style={{ padding: '12px', background: 'var(--color-bg-elevated)', borderRadius: 'var(--radius-md)', border: '2px solid var(--color-primary)', marginBottom: '8px' }}>
+                                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '6px' }}>
+                                      <strong style={{ fontSize: '13px', color: 'var(--color-primary)' }}>Edit Floor (Level {floor.level})</strong>
+                                      <button className="button secondary small" type="button" onClick={() => setEditingFloor(null)}><Icon name="close" size={13} /></button>
                                     </div>
+                                    <div className="form-row">
+                                      <label>Floor Name (optional)<input value={editFloorName} onChange={(e) => setEditFloorName(e.target.value)} maxLength={100} placeholder="e.g. First Floor" /></label>
+                                    </div>
+                                    <div className="button-row" style={{ marginTop: '6px' }}>
+                                      <button className="button primary small" type="button" disabled={busy} onClick={() => void saveFloorEdit()}>Save Floor</button>
+                                      <button className="button secondary small" type="button" onClick={() => setEditingFloor(null)}>Cancel</button>
+                                    </div>
+                                  </div>
+                                ) : (
+                                  <div className="record-main">
+                                    <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}><Icon name="pin" size={15} /><strong>{floor.name || `Level ${floor.level}`}</strong></div>
+                                    <div className="record-actions">
+                                      {can('inventory', 'edit') && <button className="button secondary small" type="button" disabled={busy} onClick={() => startEditFloor(floor)}><Icon name="edit" size={13} style={{ marginRight: '6px' }} /> Edit Floor</button>}
+                                      {can('inventory', 'delete') && <button className="button danger small" type="button" disabled={busy} onClick={() => void archiveFloor(floor)}>Archive</button>}
+                                    </div>
+                                  </div>
+                                )}
+
+                                {rooms.filter((room) => room.floor.id === floor.id).map((room) => (
+                                  <div key={room.id} style={{ marginTop: '6px' }}>
+                                    {editingRoom?.id === room.id ? (
+                                      <div className="inline-edit-form" style={{ padding: '12px', background: 'var(--color-bg-elevated)', borderRadius: 'var(--radius-md)', border: '2px solid var(--color-primary)' }}>
+                                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '8px' }}>
+                                          <strong style={{ fontSize: '13px', color: 'var(--color-primary)', display: 'inline-flex', alignItems: 'center', gap: '6px' }}><Icon name="edit" size={14} /> Edit Room: {room.code}</strong>
+                                          <button className="button secondary small" type="button" onClick={() => setEditingRoom(null)}><Icon name="close" size={13} /></button>
+                                        </div>
+                                        <div className="form-row">
+                                          <label>Room Code<input value={editRoomCode} onChange={(e) => setEditRoomCode(e.target.value)} required maxLength={30} /></label>
+                                          <label>Bed Capacity<input type="number" min={1} max={10} step={1} value={editRoomCapacity} onChange={(e) => setEditRoomCapacity(e.target.value)} required /></label>
+                                        </div>
+                                        <div className="button-row" style={{ marginTop: '8px' }}>
+                                          <button className="button primary small" type="button" disabled={busy || !editRoomCode.trim()} onClick={() => void saveRoomEdit()}>Save Room</button>
+                                          <button className="button secondary small" type="button" onClick={() => setEditingRoom(null)}>Cancel</button>
+                                        </div>
+                                      </div>
+                                    ) : (
+                                      <div className="record-main" style={{ padding: '8px 12px', background: 'var(--color-bg-elevated)', borderRadius: 'var(--radius-md)', border: '1px solid var(--color-border)', margin: '4px 0' }}>
+                                        <span style={{ display: 'inline-flex', alignItems: 'center', gap: '6px' }}><Icon name="door" size={16} /> Room <strong>{room.code}</strong> · Capacity: <strong>{room.bedCapacity} beds</strong></span>
+                                        <div className="record-actions">
+                                          {can('inventory', 'edit') && <button className="button secondary small" type="button" disabled={busy} onClick={() => startEditRoom(room)}><Icon name="edit" size={13} style={{ marginRight: '6px' }} /> Edit Room</button>}
+                                          {can('inventory', 'delete') && <button className="button danger small" type="button" disabled={busy} onClick={() => void archiveRoom(room)}>Archive</button>}
+                                        </div>
+                                      </div>
+                                    )}
                                   </div>
                                 ))}
                               </div>
@@ -1781,12 +2266,42 @@ export default function Phase2Workspace() {
                 <h3 className="inventory-list-title">Current beds</h3>
                 {!inventoryBeds.length ? <p className="empty-state">No beds configured.</p> : (
                   <div className="table-wrap"><table><thead><tr><th>Room</th><th>Bed</th><th>Status</th>{(can('inventory', 'edit') || can('inventory', 'delete')) && <th>Actions</th>}</tr></thead><tbody>
-                    {inventoryBeds.map((bed) => <tr key={bed.id}><td>{bed.room.code}</td><td>{bed.code}</td><td><span className={`status ${bed.status.toLowerCase()}`}>{bed.status.replace('_', ' ')}</span></td>
-                      {(can('inventory', 'edit') || can('inventory', 'delete')) && <td><div className="record-actions">
-                        {can('inventory', 'edit') && <button className="button secondary small" type="button" disabled={busy} onClick={() => void editBed(bed)}>Edit</button>}
-                        {can('inventory', 'delete') && <button className="button danger small" type="button" disabled={busy || bed.status !== 'AVAILABLE'} onClick={() => void archiveBed(bed)}>Archive</button>}
-                      </div></td>}
-                    </tr>)}
+                    {inventoryBeds.map((bed) => editingBed?.id === bed.id ? (
+                      <tr key={bed.id}>
+                        <td colSpan={4}>
+                          <div className="inline-edit-form" style={{ padding: '12px', background: 'var(--color-bg-subtle)', borderRadius: 'var(--radius-md)', border: '2px solid var(--color-primary)' }}>
+                            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '8px' }}>
+                              <strong style={{ fontSize: '13px', color: 'var(--color-primary)' }}>Edit Bed: Room {bed.room.code} / Bed {bed.code}</strong>
+                              <button className="button secondary small" type="button" onClick={() => setEditingBed(null)}><Icon name="close" size={13} style={{ marginRight: '4px' }} /> Cancel</button>
+                            </div>
+                            <div style={{ display: 'flex', gap: '10px', alignItems: 'flex-end', flexWrap: 'wrap' }}>
+                              <label style={{ flex: '1', minWidth: '160px' }}>
+                                Bed Code
+                                <input value={editBedCode} onChange={(e) => setEditBedCode(e.target.value)} required maxLength={30} />
+                              </label>
+                              <div className="button-row">
+                                <button className="button primary small" type="button" disabled={busy || !editBedCode.trim()} onClick={() => void saveBedEdit()}>Save Bed</button>
+                                <button className="button secondary small" type="button" onClick={() => setEditingBed(null)}>Cancel</button>
+                              </div>
+                            </div>
+                          </div>
+                        </td>
+                      </tr>
+                    ) : (
+                      <tr key={bed.id}>
+                        <td>Room <strong>{bed.room.code}</strong></td>
+                        <td><strong>{bed.code}</strong></td>
+                        <td><span className={`status ${bed.status.toLowerCase()}`}>{bed.status.replace('_', ' ')}</span></td>
+                        {(can('inventory', 'edit') || can('inventory', 'delete')) && (
+                          <td>
+                            <div className="record-actions">
+                              {can('inventory', 'edit') && <button className="button secondary small" type="button" disabled={busy} onClick={() => startEditBed(bed)}><Icon name="edit" size={13} style={{ marginRight: '6px' }} /> Edit</button>}
+                              {can('inventory', 'delete') && <button className="button danger small" type="button" disabled={busy || bed.status !== 'AVAILABLE'} onClick={() => void archiveBed(bed)}>Archive</button>}
+                            </div>
+                          </td>
+                        )}
+                      </tr>
+                    ))}
                   </tbody></table></div>
                 )}
               </section>
@@ -1794,6 +2309,13 @@ export default function Phase2Workspace() {
 
             {section === 'finance' && (
               <>
+                <div className="dashboard-hero-row">
+                  <div className="dashboard-hero-title">
+                    <span className="eyebrow">ACCOUNTS</span>
+                    <h1>Rent &amp; Invoices</h1>
+                    <p>Manage invoices, record payments, and track financial reports.</p>
+                  </div>
+                </div>
                 {can('reports', 'view') && (
                   <section className="panel finance-report">
                     <div className="panel-heading">
@@ -1808,12 +2330,95 @@ export default function Phase2Workspace() {
                     {financeReport && (
                       <>
                         <div className="finance-metrics">
-                          <div><span>Invoices issued</span><strong>{financeReport.issuedInvoiceCount}</strong><small>{formatMoney(financeReport.issuedAmountMinor, financeReport.currency)}</small></div>
-                          <div><span>Verified payments</span><strong>{formatMoney(financeReport.verifiedPaymentsMinor, financeReport.currency)}</strong></div>
-                          <div><span>Pending payments</span><strong>{formatMoney(financeReport.pendingPaymentsMinor, financeReport.currency)}</strong></div>
-                          <div><span>Refunds</span><strong>{formatMoney(financeReport.refundsMinor, financeReport.currency)}</strong></div>
-                          <div><span>Outstanding</span><strong>{financeReport.outstandingInvoiceCount}</strong><small>{formatMoney(financeReport.outstandingAmountMinor, financeReport.currency)}</small></div>
-                          <div><span>Overdue</span><strong>{financeReport.overdueInvoiceCount}</strong><small>{formatMoney(financeReport.overdueAmountMinor, financeReport.currency)}</small></div>
+                          <article className="finance-card">
+                            <div className="finance-card-header">
+                              <span>Invoices issued</span>
+                              <div className="finance-card-icon" style={{ background: 'color-mix(in srgb, var(--color-primary) 12%, transparent)', color: 'var(--color-primary)' }}>
+                                <Icon name="receipt" size={16} />
+                              </div>
+                            </div>
+                            <div className="finance-card-value">
+                              {financeReport.issuedInvoiceCount}
+                            </div>
+                            <div className="finance-card-sub">
+                              {formatMoney(financeReport.issuedAmountMinor, financeReport.currency)} total billed
+                            </div>
+                          </article>
+
+                          <article className="finance-card">
+                            <div className="finance-card-header">
+                              <span>Verified payments</span>
+                              <div className="finance-card-icon" style={{ background: 'color-mix(in srgb, var(--color-success) 12%, transparent)', color: 'var(--color-success)' }}>
+                                <Icon name="checkCircle" size={16} />
+                              </div>
+                            </div>
+                            <div className="finance-card-value" style={{ color: 'var(--color-success)' }}>
+                              {formatMoney(financeReport.verifiedPaymentsMinor, financeReport.currency)}
+                            </div>
+                            <div className="finance-card-sub">
+                              Collected &amp; verified
+                            </div>
+                          </article>
+
+                          <article className="finance-card">
+                            <div className="finance-card-header">
+                              <span>Pending payments</span>
+                              <div className="finance-card-icon" style={{ background: 'color-mix(in srgb, #f59e0b 12%, transparent)', color: '#d97706' }}>
+                                <Icon name="creditCard" size={16} />
+                              </div>
+                            </div>
+                            <div className="finance-card-value">
+                              {formatMoney(financeReport.pendingPaymentsMinor, financeReport.currency)}
+                            </div>
+                            <div className="finance-card-sub">
+                              Awaiting staff verification
+                            </div>
+                          </article>
+
+                          <article className="finance-card">
+                            <div className="finance-card-header">
+                              <span>Refunds</span>
+                              <div className="finance-card-icon" style={{ background: 'color-mix(in srgb, #8b5cf6 12%, transparent)', color: '#8b5cf6' }}>
+                                <Icon name="refund" size={16} />
+                              </div>
+                            </div>
+                            <div className="finance-card-value">
+                              {formatMoney(financeReport.refundsMinor, financeReport.currency)}
+                            </div>
+                            <div className="finance-card-sub">
+                              Total refunds processed
+                            </div>
+                          </article>
+
+                          <article className="finance-card">
+                            <div className="finance-card-header">
+                              <span>Outstanding</span>
+                              <div className="finance-card-icon" style={{ background: 'color-mix(in srgb, var(--color-danger) 12%, transparent)', color: 'var(--color-danger)' }}>
+                                <Icon name="alert" size={16} />
+                              </div>
+                            </div>
+                            <div className="finance-card-value" style={{ color: financeReport.outstandingInvoiceCount > 0 ? 'var(--color-danger)' : undefined }}>
+                              {financeReport.outstandingInvoiceCount}
+                            </div>
+                            <div className="finance-card-sub">
+                              {formatMoney(financeReport.outstandingAmountMinor, financeReport.currency)} unpaid balance
+                            </div>
+                          </article>
+
+                          <article className="finance-card">
+                            <div className="finance-card-header">
+                              <span>Overdue</span>
+                              <div className="finance-card-icon" style={{ background: 'color-mix(in srgb, #ef4444 12%, transparent)', color: '#ef4444' }}>
+                                <Icon name="calendar" size={16} />
+                              </div>
+                            </div>
+                            <div className="finance-card-value" style={{ color: financeReport.overdueInvoiceCount > 0 ? '#ef4444' : undefined }}>
+                              {financeReport.overdueInvoiceCount}
+                            </div>
+                            <div className="finance-card-sub">
+                              {formatMoney(financeReport.overdueAmountMinor, financeReport.currency)} past due date
+                            </div>
+                          </article>
                         </div>
                         {financeReport.outstandingInvoices.length > 0 && (
                           <div className="table-wrap">
@@ -1909,29 +2514,121 @@ export default function Phase2Workspace() {
                               ))}
                             </div>
                           )}
-                          {can('payments', 'create') && invoice.status === 'ISSUED' && (
-                            <details className="finance-action">
-                              <summary>Record payment / proof</summary>
+                          <div style={{ display: 'flex', gap: '10px', marginTop: '14px', flexWrap: 'wrap' }}>
+                            {can('payments', 'create') && invoice.status === 'ISSUED' && (
+                              <button
+                                type="button"
+                                className={`button ${activePaymentProofInvoiceId === invoice.id ? 'primary' : 'secondary'} small payment-proof-btn`}
+                                onClick={() => {
+                                  setActivePaymentProofInvoiceId(activePaymentProofInvoiceId === invoice.id ? null : invoice.id);
+                                  setActiveRefundInvoiceId(null);
+                                }}
+                              >
+                                {activePaymentProofInvoiceId === invoice.id ? <><Icon name="close" size={14} style={{ marginRight: '6px' }} /> Close Payment Form</> : <><Icon name="creditCard" size={14} style={{ marginRight: '6px' }} /> Record Payment / Proof</>}
+                              </button>
+                            )}
+                            {can('payments', 'approve') && invoice.verifiedPaymentsMinor > invoice.refundedMinor && invoice.status === 'ISSUED' && (
+                              <button
+                                type="button"
+                                className={`button ${activeRefundInvoiceId === invoice.id ? 'primary' : 'secondary'} small`}
+                                onClick={() => {
+                                  setActiveRefundInvoiceId(activeRefundInvoiceId === invoice.id ? null : invoice.id);
+                                  setActivePaymentProofInvoiceId(null);
+                                }}
+                              >
+                                {activeRefundInvoiceId === invoice.id ? <><Icon name="close" size={14} style={{ marginRight: '6px' }} /> Close Refund Form</> : <><Icon name="refund" size={14} style={{ marginRight: '6px' }} /> Record Refund ({formatMoney(invoice.verifiedPaymentsMinor - invoice.refundedMinor, invoice.currency)})</>}
+                              </button>
+                            )}
+                          </div>
+
+                          {/* INLINE PAYMENT PROOF FORM */}
+                          {activePaymentProofInvoiceId === invoice.id && (
+                            <div className="inline-edit-form" style={{ marginTop: '12px', padding: '16px', background: 'var(--color-bg-subtle)', borderRadius: 'var(--radius-lg)', border: '2px solid var(--color-primary)' }}>
+                              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '12px' }}>
+                                <strong style={{ fontSize: '14px', color: 'var(--color-primary)', display: 'inline-flex', alignItems: 'center', gap: '6px' }}><Icon name="creditCard" size={16} /> Record Payment Proof for Invoice #{invoice.invoiceNumber}</strong>
+                                <button className="button secondary small" type="button" onClick={() => setActivePaymentProofInvoiceId(null)}><Icon name="close" size={13} /></button>
+                              </div>
                               <form className="stack-form" onSubmit={(event) => void recordInvoicePayment(event, invoice.id)}>
-                                <label>Amount<input required name="amount" type="number" min={0.01} step={0.01} /></label>
-                                <label>Method<select name="method" defaultValue="CASH"><option value="CASH">Cash</option><option value="BANK_TRANSFER">Bank transfer</option><option value="MOBILE_WALLET">Mobile wallet</option><option value="CARD_MANUAL">Card recorded manually</option></select></label>
-                                <label>Transaction reference<input name="reference" maxLength={200} /></label>
-                                <label>Proof notes<textarea name="proofNotes" maxLength={1000} rows={2} /></label>
-                                <button className="button primary" disabled={busy}>Submit for verification</button>
+                                <div className="form-row">
+                                  <label>
+                                    <span>Amount ({invoice.currency})</span>
+                                    <input required name="amount" type="number" min={0.01} step={0.01} defaultValue={(invoice.balanceDueMinor / 100).toFixed(2)} />
+                                  </label>
+                                  <label>
+                                    <span>Payment Method</span>
+                                    <select name="method" defaultValue="BANK_TRANSFER">
+                                      <option value="BANK_TRANSFER">Bank Transfer / Online</option>
+                                      <option value="CASH">Cash at Counter</option>
+                                      <option value="MOBILE_WALLET">EasyPaisa / JazzCash / Mobile Wallet</option>
+                                      <option value="CARD_MANUAL">Card recorded manually</option>
+                                    </select>
+                                  </label>
+                                </div>
+                                <div className="form-row">
+                                  <label>
+                                    <span>Transaction Reference / Slip #</span>
+                                    <input name="reference" maxLength={200} placeholder="e.g. TRX-98234827" />
+                                  </label>
+                                  <label>
+                                    <span>Proof Notes & Verification Details</span>
+                                    <input name="proofNotes" maxLength={1000} placeholder="Depositor name, branch, or deposit slip info" />
+                                  </label>
+                                </div>
+                                <div className="button-row" style={{ marginTop: '6px' }}>
+                                  <button className="button primary" disabled={busy}>
+                                    <><Icon name="check" size={14} style={{ marginRight: '6px' }} /> Submit Payment for Verification</>
+                                  </button>
+                                  <button className="button secondary" type="button" onClick={() => setActivePaymentProofInvoiceId(null)}>
+                                    Cancel
+                                  </button>
+                                </div>
                               </form>
-                            </details>
+                            </div>
                           )}
-                          {can('payments', 'approve') && invoice.verifiedPaymentsMinor > invoice.refundedMinor && invoice.status === 'ISSUED' && (
-                            <details className="finance-action">
-                              <summary>Record manual refund (up to {formatMoney(invoice.verifiedPaymentsMinor - invoice.refundedMinor, invoice.currency)})</summary>
+
+                          {/* INLINE REFUND FORM */}
+                          {activeRefundInvoiceId === invoice.id && (
+                            <div className="inline-edit-form" style={{ marginTop: '12px', padding: '16px', background: 'var(--color-bg-subtle)', borderRadius: 'var(--radius-lg)', border: '2px solid var(--color-danger)' }}>
+                              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '12px' }}>
+                                <strong style={{ fontSize: '14px', color: 'var(--color-danger)', display: 'inline-flex', alignItems: 'center', gap: '6px' }}><Icon name="refund" size={16} /> Record Refund for Invoice #{invoice.invoiceNumber}</strong>
+                                <button className="button secondary small" type="button" onClick={() => setActiveRefundInvoiceId(null)}><Icon name="close" size={13} /></button>
+                              </div>
                               <form className="stack-form" onSubmit={(event) => void recordInvoiceRefund(event, invoice.id)}>
-                                <label>Refund amount<input required name="amount" type="number" min={0.01} max={(invoice.verifiedPaymentsMinor - invoice.refundedMinor) / 100} step={0.01} /></label>
-                                <label>Method<select name="method" defaultValue="BANK_TRANSFER"><option value="CASH">Cash</option><option value="BANK_TRANSFER">Bank transfer</option><option value="MOBILE_WALLET">Mobile wallet</option><option value="CARD_MANUAL">Card recorded manually</option></select></label>
-                                <label>Reference<input name="reference" maxLength={200} /></label>
-                                <label>Notes<textarea name="notes" maxLength={1000} rows={2} /></label>
-                                <button className="button primary" disabled={busy}>Record refund</button>
+                                <div className="form-row">
+                                  <label>
+                                    <span>Refund Amount</span>
+                                    <input required name="amount" type="number" min={0.01} max={(invoice.verifiedPaymentsMinor - invoice.refundedMinor) / 100} step={0.01} defaultValue={((invoice.verifiedPaymentsMinor - invoice.refundedMinor) / 100).toFixed(2)} />
+                                  </label>
+                                  <label>
+                                    <span>Refund Method</span>
+                                    <select name="method" defaultValue="BANK_TRANSFER">
+                                      <option value="BANK_TRANSFER">Bank Transfer</option>
+                                      <option value="CASH">Cash</option>
+                                      <option value="MOBILE_WALLET">Mobile Wallet</option>
+                                      <option value="CARD_MANUAL">Card</option>
+                                    </select>
+                                  </label>
+                                </div>
+                                <div className="form-row">
+                                  <label>
+                                    <span>Reference</span>
+                                    <input name="reference" maxLength={200} placeholder="Refund receipt / transaction ID" />
+                                  </label>
+                                  <label>
+                                    <span>Notes</span>
+                                    <input name="notes" maxLength={1000} placeholder="Reason for refund" />
+                                  </label>
+                                </div>
+                                <div className="button-row" style={{ marginTop: '6px' }}>
+                                  <button className="button danger" disabled={busy}>
+                                    Record Refund
+                                  </button>
+                                  <button className="button secondary" type="button" onClick={() => setActiveRefundInvoiceId(null)}>
+                                    Cancel
+                                  </button>
+                                </div>
                               </form>
-                            </details>
+                            </div>
                           )}
                         </article>
                       ))}
@@ -2153,22 +2850,55 @@ export default function Phase2Workspace() {
                             {can('notices', 'edit') && <span className={`status ${notice.status.toLowerCase()}`}>{notice.status}</span>}
                           </div>
                           {can('notices', 'edit') && (
-                            <div className="record-actions">
-                              <button className={`button ${notice.status === 'PUBLISHED' ? 'secondary' : 'primary'} small`} type="button" disabled={busy} onClick={() => void setNoticeStatus(notice, notice.status === 'PUBLISHED' ? 'DRAFT' : 'PUBLISHED')}>
-                                {notice.status === 'PUBLISHED' ? 'Unpublish' : 'Publish'}
-                              </button>
-                              <details className="notice-edit">
-                                <summary>Edit notice</summary>
-                                <form className="stack-form" onSubmit={(event) => void editNotice(event, notice)}>
-                                  <label>Title<input required name="title" maxLength={150} defaultValue={notice.title} /></label>
-                                  <label>Message<textarea required name="body" maxLength={5000} rows={4} defaultValue={notice.body} /></label>
-                                  <div className="two-fields">
-                                    <label>Visible from<input name="startsAt" type="date" defaultValue={notice.startsAt?.slice(0, 10) ?? ''} /></label>
-                                    <label>Visible until<input name="endsAt" type="date" defaultValue={notice.endsAt?.slice(0, 10) ?? ''} /></label>
+                            <div>
+                              <div className="record-actions" style={{ marginTop: '10px' }}>
+                                <button className={`button ${notice.status === 'PUBLISHED' ? 'secondary' : 'primary'} small`} type="button" disabled={busy} onClick={() => void setNoticeStatus(notice, notice.status === 'PUBLISHED' ? 'DRAFT' : 'PUBLISHED')}>
+                                  {notice.status === 'PUBLISHED' ? 'Unpublish' : 'Publish'}
+                                </button>
+                                <button
+                                  type="button"
+                                  className={`button ${editingNoticeId === notice.id ? 'primary' : 'secondary'} small edit-notice-btn`}
+                                  onClick={() => setEditingNoticeId(editingNoticeId === notice.id ? null : notice.id)}
+                                >
+                                  {editingNoticeId === notice.id ? <><Icon name="close" size={13} style={{ marginRight: '6px' }} /> Close Editor</> : <><Icon name="edit" size={13} style={{ marginRight: '6px' }} /> Edit Notice</>}
+                                </button>
+                              </div>
+
+                              {editingNoticeId === notice.id && (
+                                <div className="inline-edit-form" style={{ marginTop: '12px', padding: '16px', background: 'var(--color-bg-subtle)', borderRadius: 'var(--radius-lg)', border: '2px solid var(--color-primary)' }}>
+                                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '10px' }}>
+                                    <strong style={{ fontSize: '14px', color: 'var(--color-primary)' }}>Edit Notice: {notice.title}</strong>
+                                    <button className="button secondary small" type="button" onClick={() => setEditingNoticeId(null)}><Icon name="close" size={13} /></button>
                                   </div>
-                                  <button className="button secondary small" disabled={busy}>Save changes</button>
-                                </form>
-                              </details>
+                                  <form className="stack-form" onSubmit={async (event) => {
+                                    await editNotice(event, notice);
+                                    setEditingNoticeId(null);
+                                  }}>
+                                    <label>
+                                      <span>Notice Title</span>
+                                      <input required name="title" maxLength={150} defaultValue={notice.title} />
+                                    </label>
+                                    <label>
+                                      <span>Notice Content</span>
+                                      <textarea required name="body" maxLength={5000} rows={4} defaultValue={notice.body} />
+                                    </label>
+                                    <div className="two-fields">
+                                      <label>
+                                        <span>Visible From</span>
+                                        <input name="startsAt" type="date" defaultValue={notice.startsAt?.slice(0, 10) ?? ''} />
+                                      </label>
+                                      <label>
+                                        <span>Visible Until</span>
+                                        <input name="endsAt" type="date" defaultValue={notice.endsAt?.slice(0, 10) ?? ''} />
+                                      </label>
+                                    </div>
+                                    <div className="button-row" style={{ marginTop: '6px' }}>
+                                      <button className="button primary" disabled={busy}>Save Notice Changes</button>
+                                      <button className="button secondary" type="button" onClick={() => setEditingNoticeId(null)}>Cancel</button>
+                                    </div>
+                                  </form>
+                                </div>
+                              )}
                             </div>
                           )}
                         </article>
@@ -2186,27 +2916,94 @@ export default function Phase2Workspace() {
                     <h2>Register a visitor</h2>
                     <p>Visitor records include only contact details needed for the visit. New registrations require staff approval.</p>
                     <form className="stack-form" onSubmit={createVisitorVisit}>
-                      <label>Visitor name
-                        <input required maxLength={150} value={visitorVisitForm.visitorName} onChange={(event) => setVisitorVisitForm({ ...visitorVisitForm, visitorName: event.target.value })} />
+                      <label>
+                        <span>Visitor Full Name</span>
+                        <input required maxLength={150} placeholder="e.g. Muhammad Aslam" value={visitorVisitForm.visitorName} onChange={(event) => setVisitorVisitForm({ ...visitorVisitForm, visitorName: event.target.value })} />
                       </label>
-                      <label>CNIC
-                        <input required inputMode="numeric" pattern="\d{5}-?\d{7}-?\d" maxLength={15} placeholder="12345-1234567-1" value={visitorVisitForm.cnic} onChange={(event) => setVisitorVisitForm({ ...visitorVisitForm, cnic: event.target.value })} />
+                      <div className="two-fields">
+                        <label>
+                          <span>CNIC Number</span>
+                          <input required inputMode="numeric" pattern="\d{5}-?\d{7}-?\d" maxLength={15} placeholder="12345-1234567-1" value={visitorVisitForm.cnic} onChange={(event) => setVisitorVisitForm({ ...visitorVisitForm, cnic: event.target.value })} />
+                        </label>
+                        <label>
+                          <span>Phone Number (optional)</span>
+                          <input type="tel" maxLength={80} placeholder="+92 300 1234567" value={visitorVisitForm.visitorPhone} onChange={(event) => setVisitorVisitForm({ ...visitorVisitForm, visitorPhone: event.target.value })} />
+                        </label>
+                      </div>
+
+                      {/* Professional Host Selection */}
+                      <fieldset style={{ border: '1px solid var(--color-border)', borderRadius: 'var(--radius-md)', padding: '14px', margin: '0' }}>
+                        <legend style={{ fontWeight: 700, fontSize: '13px', padding: '0 6px' }}>Host Selection</legend>
+                        <div style={{ display: 'flex', gap: '20px', marginBottom: '12px' }}>
+                          <label style={{ display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer', fontWeight: 600 }}>
+                            <input
+                              type="radio"
+                              name="visitorHostMode"
+                              checked={visitorHostMode === 'resident'}
+                              onChange={() => {
+                                setVisitorHostMode('resident');
+                                setVisitorManualHost('');
+                              }}
+                            />
+                            Select Registered Resident
+                          </label>
+                          <label style={{ display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer', fontWeight: 600 }}>
+                            <input
+                              type="radio"
+                              name="visitorHostMode"
+                              checked={visitorHostMode === 'manual'}
+                              onChange={() => {
+                                setVisitorHostMode('manual');
+                                setVisitorVisitForm((curr) => ({ ...curr, hostResidentId: '' }));
+                              }}
+                            />
+                            Enter Host Name Manually
+                          </label>
+                        </div>
+
+                        {visitorHostMode === 'resident' ? (
+                          <label>
+                            <span>Active Resident Host</span>
+                            <select
+                              required={visitorHostMode === 'resident'}
+                              value={visitorVisitForm.hostResidentId}
+                              onChange={(event) => setVisitorVisitForm({ ...visitorVisitForm, hostResidentId: event.target.value })}
+                            >
+                              <option value="">Choose resident...</option>
+                              {(visitorHosts.length ? visitorHosts : residents.filter((r) => r.status === 'ACTIVE')).map((resident) => (
+                                <option key={resident.id} value={resident.id}>
+                                  {resident.firstName} {resident.lastName}
+                                </option>
+                              ))}
+                            </select>
+                          </label>
+                        ) : (
+                          <label>
+                            <span>Host Name / Office / Department</span>
+                            <input
+                              required={visitorHostMode === 'manual'}
+                              maxLength={150}
+                              placeholder="e.g. Dr. Salman, Warden Office, Guest of Management"
+                              value={visitorManualHost}
+                              onChange={(event) => setVisitorManualHost(event.target.value)}
+                            />
+                          </label>
+                        )}
+                      </fieldset>
+
+                      <label>
+                        <span>Purpose of Visit</span>
+                        <textarea required maxLength={500} rows={3} placeholder="Please detail the purpose of this visit..." value={visitorVisitForm.purpose} onChange={(event) => setVisitorVisitForm({ ...visitorVisitForm, purpose: event.target.value })} />
                       </label>
-                      <label>Phone (optional)
-                        <input type="tel" maxLength={80} value={visitorVisitForm.visitorPhone} onChange={(event) => setVisitorVisitForm({ ...visitorVisitForm, visitorPhone: event.target.value })} />
-                      </label>
-                      <label>Resident host
-                        <select required value={visitorVisitForm.hostResidentId} onChange={(event) => setVisitorVisitForm({ ...visitorVisitForm, hostResidentId: event.target.value })}>
-                          <option value="">Select an active resident</option>
-                          {residents.filter((resident) => resident.status === 'ACTIVE').map((resident) => (
-                            <option key={resident.id} value={resident.id}>{resident.firstName} {resident.lastName}</option>
-                          ))}
-                        </select>
-                      </label>
-                      <label>Visit purpose
-                        <textarea required maxLength={500} rows={3} value={visitorVisitForm.purpose} onChange={(event) => setVisitorVisitForm({ ...visitorVisitForm, purpose: event.target.value })} />
-                      </label>
-                      <button className="button primary" disabled={busy || !residents.some((resident) => resident.status === 'ACTIVE')}>Register for approval</button>
+                      <button
+                        className="button primary"
+                        disabled={
+                          busy ||
+                          (visitorHostMode === 'resident' ? !visitorVisitForm.hostResidentId : !visitorManualHost.trim())
+                        }
+                      >
+                        <><Icon name="check" size={14} style={{ marginRight: '6px' }} /> Register Visitor for Gate Approval</>
+                      </button>
                     </form>
                   </section>
                 )}
@@ -2266,7 +3063,25 @@ export default function Phase2Workspace() {
             )}
 
             {section === 'offline' && (
-              <div className="content-grid">
+              <div>
+                <div className="dashboard-hero-row">
+                  <div className="dashboard-hero-title">
+                    <span className="eyebrow">SYSTEM & RESILIENCE</span>
+                    <h1>Offline Mode &amp; Backup</h1>
+                    <p>Browser session caching, offline operational policies, and disaster recovery preflight.</p>
+                  </div>
+                  <div>
+                    {isOnline ? (
+                      <span className="sync-status-badge">
+                        <span className="sync-status-dot" /> Live Network Connected
+                      </span>
+                    ) : (
+                      <span className="status danger">Offline Mode Active</span>
+                    )}
+                  </div>
+                </div>
+
+                <div className="content-grid">
                 <section className="panel">
                   <h2>Offline sync & backup verification</h2>
                   <p>Only aggregate branch dashboard counts are cached in this browser tab session storage. Student complaint submissions can be queued in the student portal; staff operational changes are not queued. Personal details, financial amounts, and visitor contact data are not cached.</p>
@@ -2359,6 +3174,7 @@ export default function Phase2Workspace() {
                     </>
                   ) : <p className="empty-state">Backup verification has not been loaded yet.</p>}
                 </section>
+              </div>
               </div>
             )}
           </>

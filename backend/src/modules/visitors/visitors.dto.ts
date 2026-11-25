@@ -17,8 +17,14 @@ export class CreateVisitorVisitDto {
   @MaxLength(80)
   visitorPhone?: string;
 
+  @IsOptional()
   @IsUUID()
-  hostResidentId!: string;
+  hostResidentId?: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(150)
+  manualHostName?: string;
 
   @IsString()
   @MinLength(1)

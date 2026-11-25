@@ -8,7 +8,8 @@ import { AppModule } from './app.module';
 async function bootstrap() {
   const app = await NestFactory.create(AppModule);
   app.getHttpAdapter().getInstance().set('trust proxy', 1);
-  app.use(cookieParser());
+  const parseCookies = typeof cookieParser === 'function' ? cookieParser : (cookieParser as unknown as { default: typeof cookieParser }).default;
+  app.use(parseCookies());
 
   // Security headers — proposed 🟡
   app.use(helmet());
