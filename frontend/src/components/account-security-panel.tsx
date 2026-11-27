@@ -1,6 +1,6 @@
 'use client';
 
-import { FormEvent, useState } from 'react';
+import { FormEvent, useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { apiRequest, setAccessToken } from '@/lib/api/client';
 import Icon from './ui/icon';
@@ -25,6 +25,18 @@ export default function AccountSecurityPanel({
   const [error, setError] = useState('');
   const [message, setMessage] = useState('');
   const [busy, setBusy] = useState(false);
+
+  useEffect(() => {
+    if (!message) return;
+    const timer = setTimeout(() => setMessage(''), 7000);
+    return () => clearTimeout(timer);
+  }, [message]);
+
+  useEffect(() => {
+    if (!error) return;
+    const timer = setTimeout(() => setError(''), 9000);
+    return () => clearTimeout(timer);
+  }, [error]);
 
   async function changePassword(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -92,8 +104,24 @@ export default function AccountSecurityPanel({
 
   return (
     <div className="security-settings-container">
-      {message && <p className="notice success" role="status">{message}</p>}
-      {error && <p className="notice error" role="alert">{error}</p>}
+      {message && (
+        <div className="notice success" role="status">
+          <Icon name="checkCircle" size={18} />
+          <span style={{ flex: 1 }}>{message}</span>
+          <button type="button" className="notice-close" onClick={() => setMessage('')} aria-label="Dismiss message">
+            <Icon name="close" size={14} />
+          </button>
+        </div>
+      )}
+      {error && (
+        <div className="notice error" role="alert">
+          <Icon name="alert" size={18} />
+          <span style={{ flex: 1 }}>{error}</span>
+          <button type="button" className="notice-close" onClick={() => setError('')} aria-label="Dismiss error">
+            <Icon name="close" size={14} />
+          </button>
+        </div>
+      )}
 
       <div className="security-cards-grid">
         {/* CARD 1: TWO-FACTOR AUTHENTICATION (MFA) */}

@@ -1504,8 +1504,9 @@ model MealSubscription {
   tenant            Tenant                 @relation(fields: [tenantId], references: [id])
   branchId          String                 @map("branch_id") @db.Uuid
   branch            Branch                 @relation(fields: [branchId], references: [id])
-  residentId        String                 @map("resident_id") @db.Uuid
-  resident          Resident               @relation(fields: [residentId], references: [id])
+  residentId        String?                @map("resident_id") @db.Uuid
+  resident          Resident?              @relation(fields: [residentId], references: [id])
+  subscriberName    String?                @map("subscriber_name")
   planId            String                 @map("plan_id") @db.Uuid
   plan              MealSubscriptionPlan   @relation(fields: [planId], references: [id])
   startsOn          DateTime               @map("starts_on") @db.Date

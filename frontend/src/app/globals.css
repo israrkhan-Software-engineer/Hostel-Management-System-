@@ -3475,6 +3475,50 @@ table .right {
   overflow: hidden;
 }
 
+.platform-nav-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.platform-header-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 12px;
+  border-radius: var(--radius-full, 9999px);
+  background: color-mix(in srgb, var(--color-primary) 12%, transparent);
+  color: var(--color-primary);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.platform-metric-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.platform-owner-password,
+.subscription-summary {
+  margin-top: 18px;
+  padding: 18px;
+  background: var(--color-bg-subtle);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+}
+
+.subscription-summary h3 {
+  margin: 0 0 6px;
+}
+
+.subscription-summary .record-actions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-top: 12px;
+}
+
 .notice .notice-close {
   margin-left: auto;
   background: transparent;

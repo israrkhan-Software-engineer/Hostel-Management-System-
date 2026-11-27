@@ -119,6 +119,7 @@ export default function StudentPortal() {
   const isOnline = useOnlineStatus();
   const [notices, setNotices] = useState<Notice[]>([]);
   const [invoices, setInvoices] = useState<StudentInvoice[]>([]);
+  const [seenNotificationIds, setSeenNotificationIds] = useState<string[]>([]);
   const [activeTab, setActiveTab] = useState<StudentTab>('dashboard');
   const [settingsTab, setSettingsTab] = useState<'security' | 'profile' | 'notifications' | 'display'>('security');
   const [title, setTitle] = useState('');
@@ -518,7 +519,7 @@ export default function StudentPortal() {
     (total, invoice) => total + invoice.payments.filter((payment) => payment.status === 'PENDING').length,
     0,
   );
-  const notifications = [
+  const notifications = useMemo(() => [
     ...invoices.flatMap((invoice) => {
       if (invoice.status !== 'ISSUED' || invoice.balanceDueMinor <= 0) return [];
       const overdue = Boolean(invoice.dueAt && new Date(invoice.dueAt).getTime() < Date.now());
@@ -536,7 +537,45 @@ export default function StudentPortal() {
       body: notice.body,
       urgent: false,
     })),
-  ];
+  ], [invoices, notices]);
+
+  const seenStorageKey = profile?.id && branchId ? `hms-student-seen-notifications:${profile.id}:${branchId}` : '';
+
+  useEffect(() => {
+    if (!seenStorageKey) {
+      setSeenNotificationIds([]);
+      return;
+    }
+    try {
+      const raw = window.localStorage.getItem(seenStorageKey);
+      const parsed = raw ? (JSON.parse(raw) as unknown) : [];
+      setSeenNotificationIds(Array.isArray(parsed) ? parsed.filter((id): id is string => typeof id === 'string') : []);
+    } catch {
+      setSeenNotificationIds([]);
+    }
+  }, [seenStorageKey]);
+
+  const unreadNotificationsCount = useMemo(
+    () => notifications.filter((item) => !seenNotificationIds.includes(item.id)).length,
+    [notifications, seenNotificationIds],
+  );
+
+  function markAllNotificationsRead() {
+    if (!notifications.length) return;
+    const allIds = notifications.map((item) => item.id);
+    setSeenNotificationIds((current) => {
+      const merged = Array.from(new Set([...current, ...allIds]));
+      if (seenStorageKey) {
+        try {
+          window.localStorage.setItem(seenStorageKey, JSON.stringify(merged));
+        } catch {
+          // ignore storage quota errors
+        }
+      }
+      return merged;
+    });
+    setMessage('All messages marked as read.');
+  }
 
   const formattedToday = useMemo(() => {
     const d = new Date();
@@ -593,9 +632,9 @@ export default function StudentPortal() {
           >
             <Icon name={tab.icon} size={16} />
             {tab.label}
-            {tab.id === 'notifications' && notifications.length > 0 && (
+            {tab.id === 'notifications' && unreadNotificationsCount > 0 && (
               <span className="count-pill" style={{ marginLeft: 'auto', fontSize: '11px', padding: '2px 7px' }}>
-                {notifications.length}
+                {unreadNotificationsCount}
               </span>
             )}
           </button>
@@ -857,14 +896,44 @@ export default function StudentPortal() {
               )}
               {activeTab === 'notifications' && (
                 <section className="panel student-section">
-                  <div className="panel-heading"><div><h2>Notifications</h2><p>Rent reminders and hostel announcements.</p></div><span className="count-pill">{notifications.length}</span></div>
+                  <div className="panel-heading">
+                    <div>
+                      <h2>Notifications</h2>
+                      <p>Rent reminders and hostel announcements.</p>
+                    </div>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                      {unreadNotificationsCount > 0 && (
+                        <button
+                          type="button"
+                          className="button primary small"
+                          onClick={markAllNotificationsRead}
+                        >
+                          <Icon name="checkCircle" size={14} />
+                          Read all messages
+                        </button>
+                      )}
+                      <span className="count-pill">{unreadNotificationsCount > 0 ? `${unreadNotificationsCount} unread` : `${notifications.length} read`}</span>
+                    </div>
+                  </div>
                   {!notifications.length ? <p className="empty-state">There are no current notifications.</p> : (
                     <div className="record-list">
-                      {notifications.map((notification) => (
-                        <article className="record" key={notification.id}>
-                          <div className="record-main"><div><h3>{notification.title}</h3><p>{notification.body}</p></div>{notification.urgent && <span className="status rejected">OVERDUE</span>}</div>
-                        </article>
-                      ))}
+                      {notifications.map((notification) => {
+                        const isUnread = !seenNotificationIds.includes(notification.id);
+                        return (
+                          <article className="record" key={notification.id}>
+                            <div className="record-main">
+                              <div>
+                                <h3>{notification.title}</h3>
+                                <p>{notification.body}</p>
+                              </div>
+                              <div style={{ display: 'flex', gap: '6px', alignItems: 'center' }}>
+                                {isUnread && <span className="status active">NEW</span>}
+                                {notification.urgent && <span className="status rejected">OVERDUE</span>}
+                              </div>
+                            </div>
+                          </article>
+                        );
+                      })}
                     </div>
                   )}
                 </section>

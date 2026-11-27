@@ -1,7 +1,8 @@
 'use client';
 
-import { useCallback, useEffect, useState } from 'react';
+import { SyntheticEvent, useCallback, useEffect, useState } from 'react';
 import { apiRequest } from '../lib/api/client';
+import Icon from './ui/icon';
 
 type NotificationItem = {
   id: string;
@@ -25,8 +26,15 @@ export default function NotificationCenter() {
   const [items, setItems] = useState<NotificationItem[]>([]);
   const [preferences, setPreferences] = useState<Preference[]>([]);
   const [filter, setFilter] = useState<'unread' | 'all'>('unread');
+  const [seenOnOpenIds, setSeenOnOpenIds] = useState<string[]>([]);
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
+
+  useEffect(() => {
+    if (!error) return;
+    const timer = setTimeout(() => setError(''), 9000);
+    return () => clearTimeout(timer);
+  }, [error]);
 
   const load = useCallback(async () => {
     const [notificationsResult, preferencesResult] = await Promise.all([
@@ -92,11 +100,31 @@ export default function NotificationCenter() {
   const safeItems = Array.isArray(items) ? items : [];
   const unreadItems = safeItems.filter((item) => !item.readAt);
   const unreadCount = unreadItems.length;
-  // On visit, show only new/unread notifications by default
-  const displayedItems = filter === 'unread' ? unreadItems : safeItems;
+  // On visit, show newly arrived unread notifications (including those just opened in this visit)
+  const displayedItems = filter === 'unread'
+    ? safeItems.filter((item) => !item.readAt || seenOnOpenIds.includes(item.id))
+    : safeItems;
+
+  async function handleToggle(event: SyntheticEvent<HTMLDetailsElement>) {
+    const isOpen = event.currentTarget.open;
+    if (isOpen) {
+      if (unreadItems.length > 0) {
+        const idsToMark = unreadItems.map((item) => item.id);
+        setSeenOnOpenIds(idsToMark);
+        const now = new Date().toISOString();
+        setItems((current) => current.map((item) => (item.readAt ? item : { ...item, readAt: now })));
+        const result = await apiRequest<{ updated: number }>('/notifications/read-all', { method: 'POST' });
+        if (!result.ok) {
+          setError(result.message);
+        }
+      }
+    } else if (seenOnOpenIds.length > 0) {
+      setSeenOnOpenIds([]);
+    }
+  }
 
   return (
-    <details className="notification-center">
+    <details className="notification-center" onToggle={(event) => void handleToggle(event)}>
       <summary aria-label={`${unreadCount} unread notifications`}>
         Notifications{unreadCount ? <span className="notification-count">{unreadCount}</span> : null}
       </summary>
@@ -139,7 +167,15 @@ export default function NotificationCenter() {
             )}
           </div>
         </div>
-        {error && <p className="notice error" role="alert">{error}</p>}
+        {error && (
+          <div className="notice error" role="alert">
+            <Icon name="alert" size={18} />
+            <span style={{ flex: 1 }}>{error}</span>
+            <button type="button" className="notice-close" onClick={() => setError('')} aria-label="Dismiss error">
+              <Icon name="close" size={14} />
+            </button>
+          </div>
+        )}
         {!displayedItems.length ? (
           <p className="empty-state">
             {filter === 'unread' ? 'No new unread notifications.' : 'No notifications yet.'}

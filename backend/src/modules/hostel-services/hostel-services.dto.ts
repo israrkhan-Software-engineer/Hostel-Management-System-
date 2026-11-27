@@ -174,6 +174,11 @@ export class CreateMealSubscriptionDto {
 
   @IsDateString()
   endsOn!: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(150)
+  subscriberName?: string;
 }
 
 export class UploadStudentDocumentDto {

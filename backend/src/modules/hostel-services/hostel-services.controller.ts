@@ -280,6 +280,21 @@ export class HostelServicesController {
     );
   }
 
+  @Post('meal-subscriptions/manual')
+  @RequirePermission('meal_subscriptions', 'create')
+  activateManualMealSubscription(
+    @Param('branchId', ParseUUIDPipe) branchId: string,
+    @CurrentUser() user: RequestUser,
+    @Body() dto: CreateMealSubscriptionDto,
+  ) {
+    return this.services.activateManualMealSubscription(
+      user.tenantId,
+      branchId,
+      user.userId,
+      dto,
+    );
+  }
+
   @Patch('meal-subscriptions/:subscriptionId/deactivate')
   @RequirePermission('meal_subscriptions', 'edit')
   deactivateMealSubscription(

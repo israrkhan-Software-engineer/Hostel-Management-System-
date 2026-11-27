@@ -5,6 +5,8 @@ import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { apiRequest, getAccessToken, setAccessToken } from '@/lib/api/client';
 import SaasManagementPanel from './saas-management-panel';
+import ThemeToggle from './ui/theme-toggle';
+import Icon from './ui/icon';
 
 type TenantStatus = 'PROVISIONING' | 'ACTIVE' | 'SUSPENDED' | 'OFFBOARDING' | 'CLOSED';
 type Tenant = {
@@ -128,6 +130,18 @@ export default function PlatformAdminWorkspace() {
   const [success, setSuccess] = useState('');
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
+
+  useEffect(() => {
+    if (!success) return;
+    const timer = setTimeout(() => setSuccess(''), 7000);
+    return () => clearTimeout(timer);
+  }, [success]);
+
+  useEffect(() => {
+    if (!error) return;
+    const timer = setTimeout(() => setError(''), 9000);
+    return () => clearTimeout(timer);
+  }, [error]);
 
   const request = useCallback(async <T,>(path: string, options: RequestInit = {}): Promise<T | null> => {
     const response = await apiRequest<T>(path, options);
@@ -371,8 +385,15 @@ export default function PlatformAdminWorkspace() {
       <header className="platform-header">
         <Link className="platform-brand" href="/system-admin">HMS <span>PLATFORM</span></Link>
         <div className="platform-header-actions">
-          <span>Super administrator</span>
-          <button type="button" className="button secondary small" onClick={logout}>Sign out</button>
+          <span className="platform-header-badge">
+            <Icon name="shield" size={14} />
+            Super administrator
+          </span>
+          <ThemeToggle />
+          <button type="button" className="button secondary small" onClick={logout}>
+            <Icon name="signout" size={14} />
+            Sign out
+          </button>
         </div>
       </header>
 
@@ -380,11 +401,11 @@ export default function PlatformAdminWorkspace() {
         <aside className="platform-sidebar" aria-label="Platform navigation">
           <p className="platform-sidebar-label">WORKSPACE</p>
           {([
-            ['overview', 'Overview'],
-            ['tenants', 'Organizations'],
-            ['saas', 'SaaS & billing'],
-            ['audit', 'Audit log'],
-          ] as const).map(([key, label]) => (
+            ['overview', 'Overview', 'home'],
+            ['tenants', 'Organizations', 'building'],
+            ['saas', 'SaaS & billing', 'creditCard'],
+            ['audit', 'Audit log', 'fileText'],
+          ] as const).map(([key, label, icon]) => (
             <button
               type="button"
               key={key}
@@ -392,10 +413,15 @@ export default function PlatformAdminWorkspace() {
               onClick={() => { clearNotices(); setSection(key); }}
               aria-current={section === key ? 'page' : undefined}
             >
-              {label}
+              <Icon name={icon} size={16} />
+              <span>{label}</span>
             </button>
           ))}
           <div className="platform-sidebar-note">
+            <div style={{ display: 'flex', alignItems: 'center', gap: '6px', marginBottom: '6px', color: 'var(--ink-text, #e2e8f0)', fontWeight: 600 }}>
+              <Icon name="lock" size={13} />
+              <span>Isolated Control Plane</span>
+            </div>
             Platform access is isolated from tenant staff accounts and protected by administrator credentials and authenticator verification.
           </div>
         </aside>
@@ -414,32 +440,58 @@ export default function PlatformAdminWorkspace() {
               if (section === 'saas') setSaasRefresh((value) => value + 1);
               if (section === 'audit') void loadAudit();
             }}>
+              <Icon name="refresh" size={15} />
               Refresh data
             </button>
           </div>
 
-          {error && <p className="notice error" role="alert">{error}</p>}
-          {success && <p className="notice success" role="status">{success}</p>}
+          {error && (
+            <div className="notice error" role="alert">
+              <Icon name="alert" size={18} />
+              <span style={{ flex: 1 }}>{error}</span>
+              <button type="button" className="notice-close" onClick={() => setError('')} aria-label="Dismiss error">
+                <Icon name="close" size={14} />
+              </button>
+            </div>
+          )}
+          {success && (
+            <div className="notice success" role="status">
+              <Icon name="checkCircle" size={18} />
+              <span style={{ flex: 1 }}>{success}</span>
+              <button type="button" className="notice-close" onClick={() => setSuccess('')} aria-label="Dismiss message">
+                <Icon name="close" size={14} />
+              </button>
+            </div>
+          )}
 
           {section === 'overview' && (
             <>
               <div className="platform-metrics">
-                {[
-                  ['Organizations', dashboard?.tenantCount],
-                  ['Active', dashboard?.activeTenantCount],
-                  ['Suspended', dashboard?.suspendedTenantCount],
-                  ['Total users', dashboard?.totalUsers],
-                  ['Active users', dashboard?.activeUsers],
-                ].map(([label, value]) => (
-                  <article className="platform-metric" key={label}>
-                    <span>{label}</span>
+                {([
+                  ['Organizations', dashboard?.tenantCount, 'building', false],
+                  ['Active', dashboard?.activeTenantCount, 'checkCircle', true],
+                  ['Suspended', dashboard?.suspendedTenantCount, 'alert', false],
+                  ['Total users', dashboard?.totalUsers, 'users', false],
+                  ['Active users', dashboard?.activeUsers, 'user', false],
+                ] as const).map(([label, value, icon, accent]) => (
+                  <article className={`platform-metric${accent ? ' accent' : ''}`} key={label}>
+                    <span className="platform-metric-label">
+                      <Icon name={icon} size={15} />
+                      {label}
+                    </span>
                     <strong>{value ?? '—'}</strong>
                   </article>
                 ))}
               </div>
               <section className="panel platform-panel">
                 <div className="panel-heading">
-                  <div><h2>Recently added organizations</h2><p>Latest organizations on the platform.</p></div>
+                  <div>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                      <Icon name="building" size={18} />
+                      <h2>Recently added organizations</h2>
+                    </div>
+                    <p>Latest organizations on the platform.</p>
+                  </div>
                   <button type="button" className="button secondary small" onClick={() => setSection('tenants')}>
                     View all
                   </button>
@@ -457,7 +509,13 @@ export default function PlatformAdminWorkspace() {
               <div className="platform-grid">
                 <section className="panel platform-panel">
                   <div className="panel-heading">
-                    <div><h2>Create organization</h2><p>New organizations start in provisioning status.</p></div>
+                    <div>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                        <Icon name="plus" size={18} />
+                        <h2>Create organization</h2>
+                      </div>
+                      <p>New organizations start in provisioning status.</p>
+                    </div>
                   </div>
                   <form className="platform-form" onSubmit={createTenant}>
                     <label>Organization name
@@ -529,7 +587,13 @@ export default function PlatformAdminWorkspace() {
 
                 <section className="panel platform-panel">
                   <div className="panel-heading">
-                    <div><h2>Organization directory</h2><p>{tenants?.total ?? 0} matching organizations</p></div>
+                    <div>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                        <Icon name="building" size={18} />
+                        <h2>Organization directory</h2>
+                      </div>
+                      <p>{tenants?.total ?? 0} matching organizations</p>
+                    </div>
                   </div>
                   <form className="platform-filters" onSubmit={(event) => {
                     event.preventDefault();
@@ -735,7 +799,13 @@ export default function PlatformAdminWorkspace() {
           {section === 'audit' && (
             <section className="panel platform-panel">
               <div className="panel-heading">
-                <div><h2>Administrator activity</h2><p>Recent actions performed by your platform account.</p></div>
+                <div>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                    <Icon name="fileText" size={18} />
+                    <h2>Administrator activity</h2>
+                  </div>
+                  <p>Recent actions performed by your platform account.</p>
+                </div>
               </div>
               <AuditTable entries={audit?.items ?? []} />
               <Pagination page={auditPage} pageCount={pageCount(audit)} onPage={setAuditPage} />

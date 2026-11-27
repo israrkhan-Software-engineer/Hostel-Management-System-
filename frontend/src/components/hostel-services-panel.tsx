@@ -59,7 +59,8 @@ type MealSubscription = {
   endsOn: string;
   status: string;
   deactivatedAt: string | null;
-  resident?: Resident;
+  subscriberName?: string | null;
+  resident?: Resident | null;
   plan: MealPlan;
 };
 type StudentDocument = {
@@ -162,6 +163,7 @@ export default function HostelServicesPanel({
   });
   const [range, setRange] = useState({ from: localDate(), to: localDate() });
   const [selectedResidentId, setSelectedResidentId] = useState('');
+  const [manualSubscriberName, setManualSubscriberName] = useState('');
   const [attendanceValues, setAttendanceValues] = useState<Record<string, string>>({});
   const [leaveForm, setLeaveForm] = useState({ startDate: '', endDate: '', reason: '' });
   const [gatePassForm, setGatePassForm] = useState({ exitAt: '', expectedReturnAt: '', reason: '' });
@@ -260,14 +262,14 @@ export default function HostelServicesPanel({
           if (mode === 'student') {
             const rows = await get<StudentDocument[]>(`${base}/resident/documents`);
             if (active) setDocuments(rows);
-          } else if (selectedResidentId) {
+          } else if (selectedResidentId && selectedResidentId !== '__MANUAL__') {
             const rows = await get<StudentDocument[]>(`${base}/residents/${selectedResidentId}/documents`);
             if (active) setDocuments(rows);
           }
         } else if (tab === 'transfers' && mode === 'staff') {
           const [availableBeds, history] = await Promise.all([
             get<Bed[]>(`${base}/available-transfer-beds`),
-            get<RoomTransfer[]>(`${base}/room-transfers${selectedResidentId ? `?residentId=${selectedResidentId}` : ''}`),
+            get<RoomTransfer[]>(`${base}/room-transfers${selectedResidentId && selectedResidentId !== '__MANUAL__' ? `?residentId=${selectedResidentId}` : ''}`),
           ]);
           if (!active) return;
           setBeds(availableBeds);
@@ -377,6 +379,18 @@ export default function HostelServicesPanel({
 
   async function activateSubscription(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
+    if (selectedResidentId === '__MANUAL__') {
+      const name = manualSubscriberName.trim();
+      if (!name) return;
+      const ok = await send(
+        `/branches/${branchId}/meal-subscriptions/manual`,
+        'POST',
+        { ...subscriptionForm, subscriberName: name },
+        'Subscription activated.',
+      );
+      if (ok) setManualSubscriberName('');
+      return;
+    }
     if (!selectedResidentId) return;
     await send(`/branches/${branchId}/residents/${selectedResidentId}/meal-subscriptions`, 'POST', subscriptionForm, 'Subscription activated.');
   }
@@ -508,12 +522,33 @@ export default function HostelServicesPanel({
       )}
       {loading && <p className="muted" aria-live="polite">Loading {serviceTitle(tab).toLowerCase()}…</p>}
       {mode === 'staff' && ['documents', 'transfers', 'subscriptions'].includes(tab) && (
-        <label className="service-filter">Resident
-          <select value={selectedResidentId} onChange={(event) => setSelectedResidentId(event.target.value)}>
-            <option value="">Select a resident</option>
-            {residents.map((resident) => <option key={resident.id} value={resident.id}>{resident.firstName} {resident.lastName}</option>)}
-          </select>
-        </label>
+        <div className="two-fields" style={{ alignItems: 'end', marginBottom: '12px' }}>
+          <label className="service-filter">Resident
+            <select
+              value={selectedResidentId}
+              onChange={(event) => {
+                setSelectedResidentId(event.target.value);
+                if (event.target.value !== '__MANUAL__') setManualSubscriberName('');
+              }}
+            >
+              <option value="">Select a resident</option>
+              {residents.map((resident) => <option key={resident.id} value={resident.id}>{resident.firstName} {resident.lastName}</option>)}
+              {tab === 'subscriptions' && <option value="__MANUAL__">Other / Non-resident (Enter manually)</option>}
+            </select>
+          </label>
+          {tab === 'subscriptions' && selectedResidentId === '__MANUAL__' && (
+            <label className="service-filter">Other / Subscriber Name
+              <input
+                type="text"
+                required
+                maxLength={150}
+                placeholder="Enter name manually"
+                value={manualSubscriberName}
+                onChange={(event) => setManualSubscriberName(event.target.value)}
+              />
+            </label>
+          )}
+        </div>
       )}
 
       {tab === 'attendance' && (
@@ -658,7 +693,16 @@ export default function HostelServicesPanel({
                 <label>Starts<input required type="date" value={subscriptionForm.startsOn} onChange={(event) => setSubscriptionForm({ ...subscriptionForm, startsOn: event.target.value })} /></label>
                 <label>Ends<input required type="date" value={subscriptionForm.endsOn} onChange={(event) => setSubscriptionForm({ ...subscriptionForm, endsOn: event.target.value })} /></label>
               </div>
-              <button className="button primary" disabled={busy || !selectedResidentId || !plans.some((plan) => plan.isActive)}>Activate subscription</button>
+              <button
+                className="button primary"
+                disabled={
+                  busy ||
+                  !plans.some((plan) => plan.isActive) ||
+                  (selectedResidentId === '__MANUAL__' ? !manualSubscriberName.trim() : !selectedResidentId)
+                }
+              >
+                Activate subscription
+              </button>
             </form>
           )}
           {mode === 'staff' && <div className="record-list">
@@ -675,7 +719,7 @@ export default function HostelServicesPanel({
             <h3>{mode === 'student' ? 'My subscriptions' : 'Student subscriptions'}</h3>
             {!subscriptions.length ? <p className="empty-state">No subscription records yet.</p> : subscriptions.map((subscription) => (
               <article className="record record-main" key={subscription.id}>
-                <div><h3>{subscription.resident ? `${subscription.resident.firstName} ${subscription.resident.lastName} · ` : ''}{subscription.plan.name}</h3><p>{dateLabel(subscription.startsOn)} – {dateLabel(subscription.endsOn)} · {money(subscription.plan.monthlyAmountMinor)}</p></div>
+                <div><h3>{subscription.resident ? `${subscription.resident.firstName} ${subscription.resident.lastName} · ` : subscription.subscriberName ? `${subscription.subscriberName} (Manual) · ` : ''}{subscription.plan.name}</h3><p>{dateLabel(subscription.startsOn)} – {dateLabel(subscription.endsOn)} · {money(subscription.plan.monthlyAmountMinor)}</p></div>
                 <span className={`status ${subscription.status.toLowerCase()}`}>{subscription.status}</span>
                 {mode === 'staff' && subscription.status === 'ACTIVE' && has('meal_subscriptions', 'edit') && <button className="button secondary small" type="button" disabled={busy} onClick={() => void send(`/branches/${branchId}/meal-subscriptions/${subscription.id}/deactivate`, 'PATCH', undefined, 'Subscription deactivated.')}>Deactivate</button>}
               </article>

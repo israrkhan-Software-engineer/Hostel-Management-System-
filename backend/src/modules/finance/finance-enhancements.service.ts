@@ -33,7 +33,13 @@ export class FinanceEnhancementsService {
     await this.ensureBranch(tenantId, branchId);
     return this.prisma.feeStructure.findMany({
       where: { tenantId, branchId },
-      include: { assignments: { orderBy: { startsAt: 'desc' }, take: 100 } },
+      include: {
+        assignments: {
+          include: { resident: { select: { firstName: true, lastName: true } } },
+          orderBy: { startsAt: 'desc' },
+          take: 100,
+        },
+      },
       orderBy: [{ isActive: 'desc' }, { name: 'asc' }],
     });
   }

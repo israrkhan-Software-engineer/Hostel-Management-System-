@@ -78,7 +78,7 @@ export default function FinanceManagementPanel({ branchId, residents, can }: Fin
 
     if (can('invoices', 'manage_settings')) {
       const hist = await apiRequest<{ id: string; invoiceId: string; amountMinor: number; appliedAt: string }[]>(
-        `/branches/${branchId}/late-fee-settings/history`,
+        `/branches/${branchId}/late-fee-history`,
       );
       if (hist.ok) setLateFeeHistory(hist.data);
     }
@@ -89,18 +89,16 @@ export default function FinanceManagementPanel({ branchId, residents, can }: Fin
   }, [loadSettings]);
 
   useEffect(() => {
-    if (!branchId) return;
-    if (can('payments', 'view')) {
-      void apiRequest<{ balanceMinor: number; transactions: DepositRecord[] }>(
-        `/branches/${branchId}/resident/security-deposit`,
-      ).then((res) => {
-        if (res.ok) {
-          setDepositBalance(res.data.balanceMinor);
-          setDepositTransactions(res.data.transactions);
-        }
-      });
-    }
-  }, [branchId, can]);
+    if (!error) return;
+    const timer = setTimeout(() => setError(''), 9000);
+    return () => clearTimeout(timer);
+  }, [error]);
+
+  useEffect(() => {
+    if (!feedback) return;
+    const timer = setTimeout(() => setFeedback(''), 7000);
+    return () => clearTimeout(timer);
+  }, [feedback]);
 
   async function submit(
     event: FormEvent<HTMLFormElement>,
@@ -140,8 +138,24 @@ export default function FinanceManagementPanel({ branchId, residents, can }: Fin
 
   return (
     <div className="finance-management-wrapper" style={{ marginTop: '24px', display: 'grid', gap: '24px' }}>
-      {error && <p className="notice error" role="alert">{error}</p>}
-      {feedback && <p className="notice success" role="status">{feedback}</p>}
+      {error && (
+        <div className="notice error" role="alert">
+          <Icon name="alert" size={18} />
+          <span style={{ flex: 1 }}>{error}</span>
+          <button type="button" className="notice-close" onClick={() => setError('')} aria-label="Dismiss error">
+            <Icon name="close" size={14} />
+          </button>
+        </div>
+      )}
+      {feedback && (
+        <div className="notice success" role="status">
+          <Icon name="checkCircle" size={18} />
+          <span style={{ flex: 1 }}>{feedback}</span>
+          <button type="button" className="notice-close" onClick={() => setFeedback('')} aria-label="Dismiss message">
+            <Icon name="close" size={14} />
+          </button>
+        </div>
+      )}
 
       {depositBalance !== null && (
         <section className="panel subpanel">
@@ -338,7 +352,7 @@ export default function FinanceManagementPanel({ branchId, residents, can }: Fin
                                 )
                               }
                             >
-                              Invoice {assignment.resident.firstName}
+                              Invoice {assignment.resident?.firstName ?? 'Resident'}
                             </button>
                           ))}
                         </div>
@@ -531,7 +545,7 @@ export default function FinanceManagementPanel({ branchId, residents, can }: Fin
               {discounts.map((discount) => (
                 <li key={discount.id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '8px 0', borderBottom: '1px solid var(--color-border)' }}>
                   <span>
-                    {discount.resident.firstName} {discount.resident.lastName} · {discount.type} · {discount.value} ·{' '}
+                    {discount.resident?.firstName ?? 'Resident'} {discount.resident?.lastName ?? ''} · {discount.type} · {discount.value} ·{' '}
                     <span className={`status ${discount.approvedAt ? 'approved' : 'pending'}`}>
                       {discount.approvedAt ? 'Approved' : 'Pending'}
                     </span>

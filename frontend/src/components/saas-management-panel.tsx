@@ -2,6 +2,7 @@
 
 import { FormEvent, useCallback, useEffect, useState } from 'react';
 import { apiRequest } from '@/lib/api/client';
+import Icon from './ui/icon';
 
 type Plan = {
   id: string;
@@ -83,6 +84,18 @@ export default function SaasManagementPanel({ refreshKey }: { refreshKey: number
   const [error, setError] = useState('');
   const [success, setSuccess] = useState('');
   const [busy, setBusy] = useState(false);
+
+  useEffect(() => {
+    if (!success) return;
+    const timer = setTimeout(() => setSuccess(''), 7000);
+    return () => clearTimeout(timer);
+  }, [success]);
+
+  useEffect(() => {
+    if (!error) return;
+    const timer = setTimeout(() => setError(''), 9000);
+    return () => clearTimeout(timer);
+  }, [error]);
 
   const call = useCallback(async <T,>(path: string, init?: RequestInit): Promise<T | null> => {
     const response = await apiRequest<T>(path, init);
@@ -254,15 +267,41 @@ export default function SaasManagementPanel({ refreshKey }: { refreshKey: number
 
   return (
     <div className="saas-management">
-      {error && <p className="notice error" role="alert">{error}</p>}
-      {success && <p className="notice success" role="status">{success}</p>}
+      {error && (
+        <div className="notice error" role="alert">
+          <Icon name="alert" size={18} />
+          <span style={{ flex: 1 }}>{error}</span>
+          <button type="button" className="notice-close" onClick={() => setError('')} aria-label="Dismiss error">
+            <Icon name="close" size={14} />
+          </button>
+        </div>
+      )}
+      {success && (
+        <div className="notice success" role="status">
+          <Icon name="checkCircle" size={18} />
+          <span style={{ flex: 1 }}>{success}</span>
+          <button type="button" className="notice-close" onClick={() => setSuccess('')} aria-label="Dismiss message">
+            <Icon name="close" size={14} />
+          </button>
+        </div>
+      )}
       <div className="platform-metrics">
         {(report?.subscriptions ?? []).map(({ status, _count }) => (
-          <article className="platform-metric" key={status}><span>{status} subscriptions</span><strong>{_count._all}</strong></article>
+          <article className={`platform-metric${status === 'ACTIVE' ? ' accent' : ''}`} key={status}>
+            <span className="platform-metric-label">
+              <Icon name={status === 'ACTIVE' ? 'checkCircle' : 'creditCard'} size={15} />
+              {status} subscriptions
+            </span>
+            <strong>{_count._all}</strong>
+          </article>
         ))}
         {(report?.invoices ?? []).map(({ status, currency, _sum }) => (
           <article className="platform-metric" key={`${status}-${currency}`}>
-            <span>{status} · {currency}</span><strong>{((_sum.amountMinor ?? 0) / 100).toFixed(2)}</strong>
+            <span className="platform-metric-label">
+              <Icon name="receipt" size={15} />
+              {status} · {currency}
+            </span>
+            <strong>{currency} {((_sum.amountMinor ?? 0) / 100).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</strong>
           </article>
         ))}
       </div>
@@ -270,19 +309,28 @@ export default function SaasManagementPanel({ refreshKey }: { refreshKey: number
       <div className="platform-grid">
         <section className="panel platform-panel">
           <div className="panel-heading">
-            <div><h2>Subscription plans</h2><p>Prices use integer minor currency units.</p></div>
-            <button type="button" className="button secondary small" onClick={() => editPlan()}>New plan</button>
+            <div>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                <Icon name="creditCard" size={18} />
+                <h2>Subscription plans</h2>
+              </div>
+              <p>Prices use integer minor currency units.</p>
+            </div>
+            <button type="button" className="button secondary small" onClick={() => editPlan()}>
+              <Icon name="plus" size={14} />
+              New plan
+            </button>
           </div>
           <div className="table-wrap">
             <table className="platform-table">
               <thead><tr><th>Plan</th><th>Monthly / yearly</th><th>User / branch limits</th><th>Status</th><th /></tr></thead>
               <tbody>{plans.map((plan) => (
                 <tr key={plan.id}>
-                  <td><strong>{plan.name}</strong><span>{plan.description}</span></td>
+                  <td><strong>{plan.name}</strong><span className="platform-cell-subtitle">{plan.description}</span></td>
                   <td>{plan.currency} {(plan.monthlyPriceMinor / 100).toFixed(2)} / {(plan.yearlyPriceMinor / 100).toFixed(2)}</td>
                   <td>{plan.userLimit} / {plan.branchLimit}</td>
-                  <td>{plan.isActive ? 'Active' : 'Inactive'}</td>
-                  <td><button className="button secondary small" type="button" onClick={() => editPlan(plan)}>Edit</button></td>
+                  <td><span className={`status ${plan.isActive ? 'active' : 'deactivated'}`}>{plan.isActive ? 'Active' : 'Inactive'}</span></td>
+                  <td><button className="button secondary small" type="button" onClick={() => editPlan(plan)}><Icon name="edit" size={13} /> Edit</button></td>
                 </tr>
               ))}</tbody>
             </table>
@@ -314,7 +362,15 @@ export default function SaasManagementPanel({ refreshKey }: { refreshKey: number
         </section>
 
         <section className="panel platform-panel">
-          <h2>Trials and subscriptions</h2>
+          <div className="panel-heading">
+            <div>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                <Icon name="calendar" size={18} />
+                <h2>Trials and subscriptions</h2>
+              </div>
+              <p>Configure default trial periods and assign tenant plans.</p>
+            </div>
+          </div>
           {trial && (
             <form className="platform-form" onSubmit={(event) => void saveTrial(event)}>
               <h3>Default trial settings</h3>
@@ -363,13 +419,21 @@ export default function SaasManagementPanel({ refreshKey }: { refreshKey: number
       </div>
 
       <section className="panel platform-panel">
-        <div className="panel-heading"><div><h2>Platform subscription invoices</h2><p>Platform billing is separate from resident finance.</p></div></div>
+        <div className="panel-heading">
+          <div>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+              <Icon name="receipt" size={18} />
+              <h2>Platform subscription invoices</h2>
+            </div>
+            <p>Platform billing is separate from resident finance.</p>
+          </div>
+        </div>
         <div className="table-wrap"><table className="platform-table">
           <thead><tr><th>Invoice</th><th>Organization</th><th>Description</th><th>Amount</th><th>Status</th><th>Due</th><th>Payments</th></tr></thead>
           <tbody>{invoices.map((invoice) => (
             <tr key={invoice.id}><td>{invoice.invoiceNumber}</td><td>{invoice.tenant.name}</td>
               <td>{invoice.description}</td><td>{invoice.currency} {(invoice.amountMinor / 100).toFixed(2)}</td>
-              <td>{invoice.status}</td><td>{new Date(invoice.dueAt).toLocaleDateString()}</td>
+              <td><span className={`status ${invoice.status === 'PAID' ? 'active' : invoice.status === 'PENDING' ? 'pending' : 'neutral'}`}>{invoice.status}</span></td><td>{new Date(invoice.dueAt).toLocaleDateString()}</td>
               <td>{invoice.payments.map((payment) => (
                 <span key={payment.id}>{payment.method} · {(payment.amountMinor / 100).toFixed(2)} · {new Date(payment.receivedAt).toLocaleDateString()}{payment.reference ? ` · ${payment.reference}` : ''}<br /></span>
               ))}</td></tr>

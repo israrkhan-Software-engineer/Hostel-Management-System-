@@ -574,6 +574,42 @@ export class HostelServicesService {
     });
   }
 
+  async activateManualMealSubscription(
+    tenantId: string,
+    branchId: string,
+    userId: string,
+    dto: CreateMealSubscriptionDto,
+  ) {
+    await this.ensureBranch(tenantId, branchId);
+    const subscriberName = dto.subscriberName?.trim();
+    if (!subscriberName) {
+      throw new BadRequestException('Subscriber name is required for manual meal subscription');
+    }
+    const startsOn = this.dateOnly(dto.startsOn);
+    const endsOn = this.dateOnly(dto.endsOn);
+    if (endsOn < startsOn) throw new BadRequestException('Subscription end date must not precede its start date');
+    return this.prisma.$transaction(async (tx) => {
+      const plan = await tx.mealSubscriptionPlan.findFirst({
+        where: { id: dto.planId, tenantId, branchId, isActive: true },
+        select: { id: true },
+      });
+      if (!plan) throw new NotFoundException('Active meal plan not found in this branch');
+      return tx.mealSubscription.create({
+        data: {
+          tenantId,
+          branchId,
+          residentId: null,
+          subscriberName,
+          planId: plan.id,
+          startsOn,
+          endsOn,
+          activatedByUserId: userId,
+        },
+        include: { resident: { select: { id: true, firstName: true, lastName: true } }, plan: true },
+      });
+    });
+  }
+
   async deactivateMealSubscription(tenantId: string, branchId: string, subscriptionId: string) {
     await this.ensureBranch(tenantId, branchId);
     const result = await this.prisma.mealSubscription.updateMany({
